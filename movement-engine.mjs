@@ -275,7 +275,7 @@ function simulationWorker(){
       if(validation)Object.defineProperty(context,'__gulchDiagnosticStage',{set:stageSetter,configurable:false,enumerable:false});
       for(const name of ['core','cave','enemy','living','progression','village','construction','hazard','cartography']){
         markStage(name==='enemy'?'enemy-init':name);
-        scripts[name].runInContext(context,{timeout:100});
+        scripts[name].runInContext(context,{timeout:4000});
       }
       markStage('input');
       const input=JSON.stringify(message.input);
@@ -347,7 +347,7 @@ function simulationWorker(){
           'prediction={...prediction,data:chanceResult.data,activity:chanceResult.activity};}'+
         mark('stringify')+'const result=JSON.stringify(prediction);'+
         'if(typeof result!=="string"||result.length>250000)throw Error("Invalid prediction");return result;})()');
-      const result=script.runInContext(context,{timeout:100});
+      const result=script.runInContext(context,{timeout:4000});
       parentPort.postMessage({id:message.id,result});
     }catch(error){parentPort.postMessage({id:message.id,failed:true,...diagnostic(error)});}
   });
@@ -500,7 +500,7 @@ export function createMovementPreview({validation=false}={}){
     }
     return new Promise((resolve,reject)=>{
       const id=++nextId;
-      const timer=setTimeout(()=>reset(failure(503,'Movement preview timed out')),1500);
+      const timer=setTimeout(()=>reset(failure(503,'Movement preview timed out')),10000);
       pending.set(id,{resolve,reject,timer});
       try{worker.postMessage({id,input:{world:structuredClone(world),action:structuredClone(action)}});}
       catch{reset(failure(503,'Movement preview snapshot could not be copied'));}

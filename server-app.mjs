@@ -361,7 +361,7 @@ function predictionBridge(event) {
   if(event.data?.type==='gulch:capabilities'){
     if(typeof event.data.frameInstance!=='string'||event.data.frameInstance.length>128)return;
     event.stopImmediatePropagation();
-    frame.contentWindow.postMessage({type:'gulch:capabilities',protocol:2,frameInstance:event.data.frameInstance},'*');return;
+    frame.contentWindow.postMessage({type:'gulch:capabilities',protocol:2,frameInstance:event.data.frameInstance,orderedAuthority:ORDERED_RUNTIME.enabled,worldEpoch:ORDERED_RUNTIME.worldEpoch},'*');return;
   }
   // Ordered command branch (FLAG-OFF): forward the immutable ordered envelope to the ordered
   // endpoint and reply the own result. Default-OFF endpoints 404, so this is inert unless enabled.
@@ -1895,7 +1895,7 @@ async function handle(req,res){
 
   if (p === "/" || p === "/index.html" || p === "/play") {
     const nonce=crypto.randomBytes(16).toString("hex");
-    const html=fs.readFileSync(path.join(ROOT,"index.html"),"utf8").replace('<script>','<script nonce="'+nonce+'">const GAME_NONCE="'+nonce+'";window.addEventListener("message",'+predictionBridge.toString()+',true);');
+    const html=fs.readFileSync(path.join(ROOT,"index.html"),"utf8").replace('<script>','<script nonce="'+nonce+'">const GAME_NONCE="'+nonce+'";const ORDERED_RUNTIME='+JSON.stringify({enabled:ORDERED_AUTHORITY,worldEpoch:orderedWorldEpoch()})+';window.addEventListener("message",'+predictionBridge.toString()+',true);');
     res.setHeader("Content-Security-Policy",`default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; frame-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'self'; object-src 'none'`);
     return send(res,200,html,"text/html; charset=utf-8");
   }
