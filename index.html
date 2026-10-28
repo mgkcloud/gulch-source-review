@@ -2115,6 +2115,245 @@ $('repairAuto').addEventListener('click',()=>{$('repairStatus').textContent='Upd
  document.addEventListener('visibilitychange',()=>{if(document.hidden){finish('Sample stopped: page hidden');cancelRead();}});
  new MutationObserver(()=>{if(!authenticatedShell){finish('Sample stopped: sign-in required');cancelRead();timings.clear();results.replaceChildren();tasks.replaceChildren();offset=0;previous.disabled=next.disabled=true;taskStatus.textContent='Sign in to load tasks.';status.textContent='Sign in to measure builder responsiveness.';}}).observe($('gate'),{attributes:true,attributeFilter:['class']});
 })();
+
+/* ---- A2UI v0.9 renderer (vanilla, catalog-gated) ----
+ * The agent may only request components from CATALOG below. No eval, no
+ * innerHTML: every string goes through textContent.
+ */
+const A2UI_CATALOG_ID='gulch.dev:dark/v1';
+const A2UI_COMPONENTS=new Set(['Card','Column','Row','Text','Heading','Badge','Divider','Stat',
+ 'List','ListItem','Button','Code','Progress','Table','TableRow','Spacer','Image','TextField','Select']);
+
+function a2uiEl(tag,cls){const n=document.createElement(tag);if(cls)n.className=cls;return n;}
+function a2uiText(v){return v==null?'':String(v);}
+function a2uiResolve(v,data){
+ if(v&&typeof v==='object'&&!Array.isArray(v)&&typeof v.path==='string'){
+  let cur=data;for(const part of v.path.split('.')){if(cur==null)return '';cur=cur[part];}
+  return cur==null?'':cur;
+ }
+ return v;
+}
+
+const A2UI={surfaces:new Map()};
+
+A2UI.apply=function(msg){
+ if(!msg||typeof msg!=='object')return;
+ if(msg.createSurface){
+  const{surfaceId,catalogId}=msg.createSurface;
+  if(catalogId&&catalogId!==A2UI_CATALOG_ID){
+   A2UI.surfaces.set(surfaceId,{refused:'unrecognised catalog: '+catalogId,comps:new Map(),data:{}});
+   return;
+  }
+  if(!A2UI.surfaces.has(surfaceId))A2UI.surfaces.set(surfaceId,{comps:new Map(),data:{},refused:null});
+  return;
+ }
+ if(msg.updateComponents){
+  const{surfaceId,components}=msg.updateComponents;
+  let s=A2UI.surfaces.get(surfaceId);
+  if(!s){s={comps:new Map(),data:{},refused:null};A2UI.surfaces.set(surfaceId,s);}
+  for(const c of components||[]){
+   if(!c||typeof c.id!=='string')continue;
+   if(!A2UI_COMPONENTS.has(c.component))continue;
+   s.comps.set(c.id,c);
+  }
+  return;
+ }
+ if(msg.updateDataModel){
+  const{surfaceId,data}=msg.updateDataModel;
+  const s=A2UI.surfaces.get(surfaceId);
+  if(s)s.data=(data&&typeof data==='object')?data:{};
+  return;
+ }
+ if(msg.deleteSurface){
+  A2UI.surfaces.delete(msg.deleteSurface.surfaceId);
+ }
+};
+
+A2UI.node=function(id,s,seen){
+ const c=s.comps.get(id);
+ if(!c)return a2uiEl('span');
+ if(seen.has(id))return a2uiEl('span');
+ seen.add(id);
+ const p=k=>a2uiResolve(c[k],s.data);
+ let node;
+ switch(c.component){
+  case 'Card':{
+   node=a2uiEl('section','a2ui-card');
+   if(p('accent'))node.classList.add('accent');
+   if(p('title')){const h=a2uiEl('div','a2ui-card-title');h.textContent=a2uiText(p('title'));node.appendChild(h);}
+   if(p('subtitle')){const h=a2uiEl('div','a2ui-card-sub');h.textContent=a2uiText(p('subtitle'));node.appendChild(h);}
+   const b=a2uiEl('div','a2ui-card-body');A2UI.kids(c,s,seen,b);node.appendChild(b);break;
+  }
+  case 'Column':case 'Row':{
+   node=a2uiEl('div',c.component==='Column'?'a2ui-col':'a2ui-row');
+   if(p('gap'))node.style.gap=a2uiText(p('gap'));
+   if(p('align'))node.style.alignItems=a2uiText(p('align'));
+   if(c.component==='Row'&&p('wrap'))node.style.flexWrap='wrap';
+   A2UI.kids(c,s,seen,node);break;
+  }
+  case 'Text':{
+   node=a2uiEl('div','a2ui-text');
+   if(p('variant'))node.classList.add('v-'+a2uiText(p('variant')));
+   if(p('mono'))node.classList.add('mono');
+   node.textContent=a2uiText(p('text'));break;
+  }
+  case 'Heading':{
+   const lvl=Math.min(4,Math.max(1,Number(p('level'))||2));
+   node=a2uiEl('h'+lvl,'a2ui-heading');node.textContent=a2uiText(p('text'));break;
+  }
+  case 'Badge':{
+   node=a2uiEl('span','a2ui-badge');
+   if(p('tone'))node.classList.add('t-'+a2uiText(p('tone')));
+   node.textContent=a2uiText(p('text'));break;
+  }
+  case 'Divider':node=a2uiEl('hr','a2ui-divider');break;
+  case 'Stat':{
+   node=a2uiEl('div','a2ui-stat');
+   const l=a2uiEl('div','a2ui-stat-label');l.textContent=a2uiText(p('label'));
+   const v=a2uiEl('div','a2ui-stat-value');v.textContent=a2uiText(p('value'));
+   node.append(l,v);
+   if(p('note')){const n=a2uiEl('div','a2ui-stat-note');n.textContent=a2uiText(p('note'));node.appendChild(n);}
+   break;
+  }
+  case 'List':{
+   node=a2uiEl(p('ordered')?'ol':'ul','a2ui-list');A2UI.kids(c,s,seen,node);break;
+  }
+  case 'ListItem':{
+   node=a2uiEl('li','a2ui-li');
+   if(p('text'))node.textContent=a2uiText(p('text'));
+   else A2UI.kids(c,s,seen,node);
+   break;
+  }
+  case 'Button':{
+   node=a2uiEl('button','a2ui-btn');node.type='button';
+   if(p('tone'))node.classList.add('t-'+a2uiText(p('tone')));
+   node.textContent=a2uiText(p('label'))||'Action';break;
+  }
+  case 'TextField':{
+   const w=a2uiEl('label','a2ui-field');
+   if(p('label')){const l=a2uiEl('span','a2ui-field-label');l.textContent=a2uiText(p('label'));w.appendChild(l);}
+   const i=a2uiEl('input','a2ui-input');i.type='text';i.value=a2uiText(p('value'));
+   if(p('placeholder'))i.placeholder=a2uiText(p('placeholder'));
+   w.appendChild(i);node=w;break;
+  }
+  case 'Select':{
+   const w=a2uiEl('label','a2ui-field');
+   if(p('label')){const l=a2uiEl('span','a2ui-field-label');l.textContent=a2uiText(p('label'));w.appendChild(l);}
+   const sel=a2uiEl('select','a2ui-select');
+   for(const o of (p('options')||[])){
+    const op=a2uiEl('option');
+    op.value=a2uiText(o&&o.value!=null?o.value:o);
+    op.textContent=a2uiText(o&&o.label!=null?o.label:o);
+    sel.appendChild(op);
+   }
+   if(p('value')!=null)sel.value=a2uiText(p('value'));
+   w.appendChild(sel);node=w;break;
+  }
+  case 'Code':{
+   node=a2uiEl('pre','a2ui-code');
+   const code=a2uiEl('code');code.textContent=a2uiText(p('text'));
+   if(p('lang'))code.dataset.lang=a2uiText(p('lang'));
+   node.appendChild(code);break;
+  }
+  case 'Image':{
+   const src=a2uiText(p('src'));
+   node=a2uiEl('img','a2ui-img');
+   if(/^(data:|blob:|\/)/.test(src))node.src=src;
+   node.alt=a2uiText(p('alt'));node.loading='lazy';break;
+  }
+  case 'Progress':{
+   node=a2uiEl('div','a2ui-progress');
+   if(p('label')){const l=a2uiEl('div','a2ui-progress-label');l.textContent=a2uiText(p('label'));node.appendChild(l);}
+   const track=a2uiEl('div','a2ui-progress-track');
+   const bar=a2uiEl('div','a2ui-progress-bar');
+   const max=Number(p('max'))||100,val=Number(p('value'))||0;
+   bar.style.width=Math.max(0,Math.min(100,(val/max)*100))+'%';
+   track.appendChild(bar);node.appendChild(track);break;
+  }
+  case 'Table':{
+   node=a2uiEl('div','a2ui-table-wrap');
+   const tbl=a2uiEl('table','a2ui-table');
+   const cols=p('columns')||[];
+   if(cols.length){
+    const th=a2uiEl('thead'),tr=a2uiEl('tr');
+    for(const col of cols){const h=a2uiEl('th');h.textContent=a2uiText(col);tr.appendChild(h);}
+    th.appendChild(tr);tbl.appendChild(th);
+   }
+   const tb=a2uiEl('tbody');
+   for(const rid of (c.rows||[])){
+    const rc=s.comps.get(rid);
+    if(!rc||rc.component!=='TableRow')continue;
+    const tr=a2uiEl('tr');
+    for(const cell of (rc.cells||[])){
+     const td=a2uiEl('td');td.textContent=a2uiText(a2uiResolve(cell,s.data));tr.appendChild(td);
+    }
+    tb.appendChild(tr);
+   }
+   tbl.appendChild(tb);node.appendChild(tbl);break;
+  }
+  case 'Spacer':{
+   node=a2uiEl('div','a2ui-spacer');node.style.height=a2uiText(p('size'))||'8px';break;
+  }
+  default:node=a2uiEl('span');
+ }
+ return node;
+};
+
+A2UI.kids=function(c,s,seen,into){
+ for(const k of (c.children||[])){
+  const n=A2UI.node(k,s,seen);
+  if(n)into.appendChild(n);
+ }
+};
+
+/* Parse ```a2ui fenced blocks out of an answer, apply them, render them. */
+A2UI.renderInto=function(container,rawText){
+ const re=/```a2ui\s*\n([\s\S]*?)```/g;
+ let m,any=false;
+ while((m=re.exec(rawText))!==null){
+  // Models emit either a JSON array, a single object, or NDJSON (one object
+  // per line). Accept all three.
+  let msgs=null;
+  const bodyTxt=m[1].trim();
+  try{
+    const parsed=JSON.parse(bodyTxt);
+    msgs=Array.isArray(parsed)?parsed:[parsed];
+  }catch{
+    msgs=[];
+    for(const line of bodyTxt.split(/\n+/)){
+      const L=line.trim().replace(/,$/,'');
+      if(!L||L==='['||L===']')continue;
+      try{msgs.push(JSON.parse(L));}catch{}
+    }
+  }
+  if(!msgs||!msgs.length)continue;
+  let last=null;
+  for(const msg of msgs){
+   if(msg&&msg.createSurface)last=msg.createSurface.surfaceId;
+   if(msg&&msg.updateComponents)last=msg.updateComponents.surfaceId;
+   A2UI.apply(msg);
+  }
+  if(!last)continue;
+  const s=A2UI.surfaces.get(last);
+  if(!s)continue;
+  const host=a2uiEl('div','a2ui-root');
+  if(s.refused){
+   host.textContent='A2UI: '+s.refused;
+   host.className='a2ui-refused';
+  }else{
+   const root=s.comps.get('root');
+   if(root)host.appendChild(A2UI.node('root',s,new Set()));
+   else continue;
+  }
+  container.appendChild(host);
+  any=true;
+ }
+ return any;
+};
+
+/* Strip a2ui fences from the visible prose text. */
+function stripA2UI(t){return t.replace(/```a2ui\s*\n[\s\S]*?```/g,'').replace(/\n{3,}/g,'\n\n').trim();}
+
 /* Ask overlay: ChatGPT-style modal streaming over /api/ask (SSE).
    Reuses the existing app-server-stream event shapes:
    thread.started | turn.started | source.delta | item.completed | turn.completed | error
@@ -2137,6 +2376,92 @@ css.textContent=`
  box-shadow:0 24px 80px rgba(0,0,0,.6)}
 #askHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #2b352a;flex:0 0 auto}
 #askHead .title{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#8b9a7d}
+
+/* ---- A2UI rendered surfaces ---- */
+.a2ui-root{margin-top:10px}
+.a2ui-card{border:1px solid #2b352a;background:#0c100c;padding:12px 14px;margin:8px 0}
+.a2ui-card.accent{border-left:3px solid var(--amber,#d8a13a)}
+.a2ui-card-title{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#9aa88c;margin-bottom:2px}
+.a2ui-card-sub{font-size:11px;color:#6f7d63;margin-bottom:8px}
+.a2ui-card-body{display:flex;flex-direction:column;gap:8px}
+.a2ui-col{display:flex;flex-direction:column;gap:8px}
+.a2ui-row{display:flex;flex-direction:row;gap:8px;align-items:center}
+.a2ui-text{color:#d7e0d2;white-space:pre-wrap;word-break:break-word}
+.a2ui-text.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.a2ui-text.v-caption{font-size:11px;color:#87947f}
+.a2ui-text.v-body{font-size:14px}
+.a2ui-heading{color:#e6efe0;margin:4px 0;font-weight:600;letter-spacing:.02em}
+h1.a2ui-heading{font-size:20px}h2.a2ui-heading{font-size:17px}h3.a2ui-heading{font-size:15px}h4.a2ui-heading{font-size:13px}
+.a2ui-badge{display:inline-block;border:1px solid #34402f;color:#9aa88c;padding:1px 7px;font-size:10px;
+ letter-spacing:.08em;text-transform:uppercase}
+.a2ui-badge.t-good{border-color:#3f5a35;color:#9fd08a}
+.a2ui-badge.t-bad{border-color:#5a3a35;color:#e0a08a}
+.a2ui-badge.t-warn{border-color:#5a4f35;color:#e0c98a}
+.a2ui-divider{border:0;border-top:1px solid #202720;margin:8px 0}
+.a2ui-stat{display:flex;flex-direction:column;gap:1px;padding:6px 0}
+.a2ui-stat-label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#6f7d63}
+.a2ui-stat-value{font-size:19px;color:var(--amber,#d8a13a);font-variant-numeric:tabular-nums}
+.a2ui-stat-note{font-size:10px;color:#7d8a70}
+.a2ui-list{margin:2px 0 2px 18px;padding:0;color:#c8d3c0}
+.a2ui-li{margin:2px 0}
+.a2ui-btn{background:transparent;border:1px solid #34402f;color:#a9b89c;border-radius:0;
+ padding:7px 14px;font:12px/1 ui-monospace,monospace;cursor:pointer;text-transform:uppercase;letter-spacing:.08em;
+ min-height:38px}
+.a2ui-btn:hover{border-color:var(--amber,#d8a13a);color:var(--amber,#d8a13a)}
+.a2ui-code{background:#070907;border:1px solid #202720;padding:9px 11px;overflow:auto;
+ font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#c8d3c0;margin:6px 0}
+.a2ui-img{max-width:100%;height:auto;border:1px solid #202720;margin:6px 0}
+.a2ui-progress-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6f7d63;margin-bottom:4px}
+.a2ui-progress-track{height:6px;background:#141a13;border:1px solid #202720}
+.a2ui-progress-bar{height:100%;background:var(--amber,#d8a13a)}
+.a2ui-table-wrap{overflow:auto;margin:8px 0}
+.a2ui-table{border-collapse:collapse;width:100%;font-size:12px}
+.a2ui-table th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6f7d63;
+ border-bottom:1px solid #2b352a;padding:6px 10px 6px 0}
+.a2ui-table td{border-bottom:1px solid #161c15;padding:6px 10px 6px 0;color:#c8d3c0;vertical-align:top}
+.a2ui-spacer{display:block}
+.a2ui-refused{border:1px dashed #5a3a35;color:#e0a08a;padding:8px 10px;font-size:11px;margin:8px 0}
+
+/* ---- responsive: overlay goes full-bleed and larger on small screens ---- */
+@media(max-width:820px){
+ #askOverlay{align-items:stretch}
+ #askPanel{width:100vw;height:100dvh;max-height:100dvh;border:0;border-radius:0}
+ #askHead{padding:12px 14px;padding-top:calc(12px + env(safe-area-inset-top))}
+ #askHead .title{font-size:13px}
+ #askHead .badge{font-size:12px;padding:3px 8px}
+ #askHead .modes button{padding:8px 16px;min-height:40px;font-size:12px}
+ #askHead .scope{font-size:13px;min-height:40px}
+ #askBody{padding:14px 14px 8px}
+ .ax .role{font-size:11px}
+ .ax.bot .text,.ax.you .text{font-size:16px;line-height:1.65}
+ #askFoot{padding:10px 12px calc(10px + env(safe-area-inset-bottom));gap:8px}
+ #askInput{font-size:16px;min-height:52px;padding:12px}
+ #askSend{height:52px;padding:0 20px;font-size:13px}
+ #askNew{height:52px;padding:0 14px;font-size:12px}
+ .a2ui-card{padding:14px}
+ .a2ui-text.v-body{font-size:15px}
+ .a2ui-stat-value{font-size:24px}
+ .a2ui-table{font-size:14px}
+ .a2ui-btn{min-height:46px;padding:10px 18px;font-size:13px}
+ .ax .trace{font-size:12px}
+ .ax .trace .v{font-size:12px}
+ .ax .trace .events div{font-size:11px}
+}
+@media(max-width:820px) and (orientation:landscape){
+ #askPanel{height:100dvh}
+ #askBody{padding-top:8px}
+}
+#askHead .modes{display:flex;border:1px solid #34402f}
+#askHead .modes button{border:0;padding:5px 12px;min-height:26px}
+#askHead .modes button+button{border-left:1px solid #34402f}
+#askHead .modes button[aria-selected=true]{background:var(--amber,#d8a13a);color:#141505}
+#askHead .scope{background:#070907;border:1px solid #34402f;color:#a9b89c;border-radius:0;
+ padding:4px 6px;font:11px/1 ui-monospace,monospace}
+#askHead .scope.hidden{display:none}
+.ax .steps{margin-top:8px;font-size:11px;color:#8b9a7d}
+.ax .steps div{padding:1px 0}
+.ax .steps .st-done{color:#9fd08a}
+.ax .steps .st-bad{color:#e0a08a}
 #askHead .spacer{flex:1}
 #askHead .badge{font-size:11px;padding:2px 7px;border:1px solid #34402f;color:#9aa88c;border-radius:0}
 #askHead button{background:transparent;border:1px solid #34402f;color:#a9b89c;border-radius:0;
@@ -2181,7 +2506,16 @@ overlay.id='askOverlay';
 overlay.innerHTML=`
  <div id="askPanel" role="dialog" aria-modal="true" aria-label="Ask Gulch">
   <div id="askHead">
-   <span class="title">Ask</span>
+   <span class="title" id="askTitle">Ask</span>
+   <div class="modes" role="tablist" aria-label="Mode">
+    <button type="button" role="tab" id="askModeAsk" data-askmode="ask" aria-selected="true">Ask</button>
+    <button type="button" role="tab" id="askModeCreate" data-askmode="create" aria-selected="false">Create</button>
+   </div>
+   <select class="scope hidden" id="askScope" aria-label="Workspace">
+    <option value="gameplay">Game behavior</option>
+    <option value="game-ui">Game interface</option>
+    <option value="build-tools">Build tools</option>
+   </select>
    <span class="badge" id="askModel">model —</span>
    <span class="badge" id="askCtx">ctx —</span>
    <span class="spacer"></span>
@@ -2203,6 +2537,29 @@ const modelBadge=document.getElementById('askModel');
 const ctxBadge=document.getElementById('askCtx');
 const panel=document.getElementById('askPanel');
 let busy=false;
+let askMode='ask';
+const askTitle=document.getElementById('askTitle');
+const askScope=document.getElementById('askScope');
+const modeAskBtn=document.getElementById('askModeAsk');
+const modeCreateBtn=document.getElementById('askModeCreate');
+
+function paintMode(){
+ for(const b of document.querySelectorAll('[data-askmode]'))
+  b.setAttribute('aria-selected',String(b.dataset.askmode===askMode));
+ askTitle.textContent = askMode==='create' ? 'Create' : 'Ask';
+ askScope.classList.toggle('hidden', askMode!=='create');
+ input.placeholder = askMode==='create'
+  ? 'Describe a change: "add a wolf that hunts at night"... it will be queued and built.'
+  : 'Ask about the game or the code — answers stream live, read-only.';
+ sendBtn.textContent = askMode==='create' ? 'Create' : 'Ask';
+}
+for(const b of document.querySelectorAll('[data-askmode]')){
+ b.addEventListener('click',()=>{
+  if(busy)return;
+  askMode=b.dataset.askmode==='create'?'create':'ask';
+  paintMode();
+ });
+}
 
 const esc=s=>String(s==null?'':s);
 
@@ -2279,10 +2636,86 @@ bar.addEventListener('click',e=>{
 },true);
 
 /* ---------- streaming ---------- */
+async function create(text){
+ busy=true;sendBtn.disabled=true;sendBtn.textContent='…';
+ input.value='';
+ addAsk('you',text);
+ const {el,t}=addAsk('bot','queueing…');
+ el.classList.add('live');
+ const steps=document.createElement('div');steps.className='steps';
+ ensureTrace(el).appendChild(steps);
+
+ const scope=askScope.value||'gameplay';
+ let jobId=null;
+ const seen=[];
+ const mark=(label,cls)=>{
+  if(seen.includes(label))return;
+  seen.push(label);
+  const d=document.createElement('div');d.className=cls||'';d.textContent=label;
+  steps.appendChild(d);
+  body.scrollTop=body.scrollHeight;
+ };
+ try{
+  const before=await (await fetch('/api/bootstrap')).json();
+  const baseTotal=before?.history?.patchTotal??0;
+  const r=await fetch('/api/chat',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({text,scope})
+  });
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){throw Error(j.error||('HTTP '+r.status));}
+  mark('queued · scope '+scope,'st-done');
+
+  const deadline=Date.now()+15*60*1000;
+  let lastStatus='';
+  while(Date.now()<deadline){
+   await new Promise(res=>setTimeout(res,1800));
+   let boot;
+   try{boot=await (await fetch('/api/bootstrap')).json();}catch{continue;}
+   const upd=(boot?.shell?.taskUpdates||[]);
+   // find our job: newest entry whose text matches ours, or id beyond the pre-count
+   let mine=null;
+   for(const u of upd){
+    if(jobId!==null){ if(u.id===jobId) mine=u; }
+    else if(typeof u.text==='string'&&u.text.slice(0,40)===text.slice(0,40)){ mine=u; jobId=u.id; }
+   }
+   if(mine){
+    if(jobId===null)jobId=mine.id;
+    const st=mine.status||'';
+    if(st!==lastStatus){
+     lastStatus=st;
+     const bad=['failed','rejected','cancelled','partial'].includes(st);
+     const done=st==='applied';
+     mark(st+(mine.stage&&mine.stage!==st?' · '+mine.stage:'')+(mine.id?'  #'+mine.id:''),
+          bad?'st-bad':done?'st-done':'');
+    }
+    if(['applied','failed','rejected','cancelled'].includes(st))break;
+   }
+   const shell=boot?.shell||{};
+   if(jobId===null&&shell.pending===0&&shell.running===0&&(boot?.history?.patchTotal??0)>baseTotal){
+    mark('job registered (id not yet visible)','st-done');
+   }
+   if(jobId!==null)setMeta(el,{'job':String(jobId),'status':lastStatus||'—','scope':scope});
+  }
+  t.textContent = lastStatus==='applied'
+   ? 'Created. The change was built, smoke-tested and activated.'
+   : (lastStatus? 'Finished with status: '+lastStatus : 'Timed out waiting for the job.');
+  if(lastStatus==='applied'){t.style.color='#cfe6c4';}
+ }catch(err){
+  el.classList.add('err');
+  t.textContent='· '+(err.message||String(err));
+ }finally{
+  el.classList.remove('live');
+  busy=false;sendBtn.disabled=false;paintMode();
+  body.scrollTop=body.scrollHeight;
+ }
+}
+
 async function ask(){
  if(busy)return;
  const text=input.value.trim();
  if(!text)return;
+ if(askMode==='create'){return create(text);}
  busy=true;sendBtn.disabled=true;sendBtn.textContent='…';
  input.value='';
  addAsk('you',text);
@@ -2293,6 +2726,7 @@ async function ask(){
  const t0=performance.now();
  let answer='';
  let sawError=null;
+ const t2raw=()=>answer;
 
  try{
   const res=await fetch('/api/ask',{
@@ -2367,6 +2801,12 @@ async function ask(){
  el.classList.remove('live');
  if(cursor.parentNode)cursor.remove();
 
+ // A2UI: if the answer carries fenced a2ui blocks, render them below the prose.
+ if(answer&&answer.indexOf('```a2ui')!==-1){
+  t.textContent=stripA2UI(answer);
+  try{ A2UI.renderInto(el,t2raw()); }catch{}
+ }
+
  if(sawError){
   el.classList.add('err');
   if(!answer)t.textContent='· '+sawError; else t.textContent=answer+'\n\n· '+sawError;
@@ -2380,6 +2820,7 @@ async function ask(){
  input.focus();
 }
 
+paintMode();
 sendBtn.addEventListener('click',()=>void ask());
 input.addEventListener('keydown',e=>{
  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void ask();}

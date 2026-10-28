@@ -2136,13 +2136,23 @@ function askSourceContext(question){
       let ctxBytes=0;
       if(ctx.manifest){
         sourceBlock='\n\n--- FILE MANIFEST ('+ctx.total+' files) ---\n'+ctx.manifest.slice(0,20000);
-        if(ctx.picked.length){
-          sourceBlock+='\n\n--- SOURCE EXCERPTS (most relevant first) ---\n';
-          for(const item of ctx.picked){
-            sourceBlock+='\n### '+item.rel+'\n'+item.content+'\n';
-            ctxBytes+=item.content.length;
-          }
-        }
+        // With shell tools enabled the agent reads what it needs itself;
+        // inlining 150KB of source would only crowd the context.
+        sourceBlock+='\n\nYou have read-only shell access to this repository. '
+          +'Use it to inspect any file or directory you need before answering '
+          +'(rg, ls, cat, head, wc). Do not guess at file contents you can read.';
+        sourceBlock+='\n\nRICH ANSWERS: whenever the answer is naturally structured '
+          +'(a comparison, metrics, a table, a checklist, a status summary), you MUST '
+          +'render it as A2UI rather than a markdown table or bullet list. '
+          +'Do NOT emit markdown tables at all. '
+          +'Append ONE fenced block tagged a2ui containing A2UI v0.9 messages as JSON. '
+          +'Emit createSurface then updateComponents. Catalog id: gulch.dev:dark/v1. '
+          +'Allowed components ONLY: Card, Column, Row, Text, Heading, Badge, Divider, '
+          +'Stat, List, ListItem, Button, Code, Progress, Table, TableRow, Spacer. '
+          +'Every component needs an id; the tree root must have id "root"; containers '
+          +'reference children by id array. Keep prose above the block; do not repeat '
+          +'the prose inside the block. Omit the block entirely for simple answers.';
+        if(ctx.picked.length)ctxBytes=0;
       }
       write({type:"ask.context",files:ctx.picked.map(p=>p.rel),totalFiles:ctx.total,
         filesIncluded:ctx.picked.length,contextChars:ctxBytes+Math.min(ctx.manifest.length,20000)});
@@ -2154,7 +2164,7 @@ function askSourceContext(question){
         +"If the answer requires a code change, say what would need to change and stop; the operator will use Task mode for that."
         +sourceBlock
         +"\n\nQuestion:\n"+question;
-      const result=await streamSourceTurn({prompt,root:ROOT,cwd:ROOT,timeoutMs:180000,effort:'low',
+      const result=await streamSourceTurn({prompt,root:ROOT,cwd:ROOT,timeoutMs:180000,effort:'low',tools:true,
         onEvent:ev=>write(ev)});
       const answer=typeof result?.text==="string"?result.text.trim():"";
       write({type:"ask.done",ok:!!answer,answerChars:answer.length,elapsedMs:Date.now()-t0,

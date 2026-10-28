@@ -112,7 +112,7 @@ class AppServerSession{
  * Events: thread.started(transport:'app-server') | turn.started | source.delta
  *         | item.completed | turn.completed | error
  */
-export async function streamSourceTurn({prompt,images=[],outputSchema,cwd,root,onEvent=()=>{},signal,timeoutMs=180000,effort='low'}={}){
+export async function streamSourceTurn({prompt,images=[],outputSchema,cwd,root,onEvent=()=>{},signal,timeoutMs=180000,effort='low',tools=false}={}){
   if(typeof prompt!=='string'||!prompt)throw new Error('prompt required');
   const work=path.resolve(cwd||path.join(root,'sdk-work'));
   fs.mkdirSync(work,{recursive:true,mode:0o700});
@@ -145,6 +145,22 @@ export async function streamSourceTurn({prompt,images=[],outputSchema,cwd,root,o
         lastDeltaAt=Date.now();
         if(deltaChars>700000){failure='stream exceeded source batch limit';return;}
         emit({type:'source.delta',text:delta,seq:deltaCount,transport:'app-server'});
+        return;
+      }
+      // Tool activity: surface what the agent runs so the UI can show it.
+      if(msg.method==='item/started'&&p.item&&p.item.type==='commandExecution'){
+        const cmd=p.item.command||p.item.commandLine||'';
+        emit({type:'tool.start',tool:'shell',command:String(cmd).slice(0,2000),itemId:p.item.id||null});
+        return;
+      }
+      if(msg.method==='item/commandExecution/outputDelta'&&typeof p.delta==='string'){
+        emit({type:'tool.output',tool:'shell',text:p.delta.slice(0,4000),itemId:p.itemId||null});
+        return;
+      }
+      if(msg.method==='item/completed'&&p.item&&p.item.type==='commandExecution'){
+        emit({type:'tool.end',tool:'shell',itemId:p.item.id||null,
+          exitCode:p.item.exitCode!==undefined?p.item.exitCode:null,
+          status:p.item.status||null});
         return;
       }
       if(INTERNAL_NOTIFICATION_PREFIXES.some(prefix=>msg.method.startsWith(prefix)))return;
@@ -185,7 +201,7 @@ export async function streamSourceTurn({prompt,images=[],outputSchema,cwd,root,o
     const thread=await rpc('thread/start',{
       cwd:work,sandbox:'read-only',approvalPolicy:'never',ephemeral:true,
       config:{model_provider:'openai',web_search:'disabled',
-        features:{shell_tool:false,apply_patch_freeform:false}}});
+        features:{shell_tool:tools===true,apply_patch_freeform:false}}});
     threadId=thread?.thread?.id||threadId;
     emit({type:'thread.started',transport:'app-server',threadId,model:thread?.model||null,
       modelProvider:thread?.modelProvider||null});
