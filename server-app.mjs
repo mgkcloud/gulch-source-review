@@ -2114,20 +2114,38 @@ function askSourceContext(question){
     const question=typeof b.text==="string"?b.text.trim():"";
     if(!question)return send(res,400,{error:"Question must not be empty"});
     if(question.length>6000)return send(res,400,{error:"Question is too long; keep it under 6000 characters"});
+    res.writeHead(200,{
+      "Content-Type":"text/event-stream",
+      "Cache-Control":"no-cache, no-transform",
+      Connection:"keep-alive",
+      "X-Accel-Buffering":"no",
+    });
+    const t0=Date.now();
+    let closed=false;
+    req.on("close",()=>{closed=true;});
+    const write=ev=>{
+      if(closed)return;
+      try{res.write("data: "+JSON.stringify({at:Date.now()-t0,...ev})+"\n\n");}catch{closed=true;}
+    };
+    write({type:"ask.start",question,questionChars:question.length});
     try{
       const {streamSourceTurn}=await import('./app-server-stream.mjs');
       let ctx;
       try{ctx=askSourceContext(question);}catch{ctx={manifest:'',picked:[],total:0};}
       let sourceBlock='';
+      let ctxBytes=0;
       if(ctx.manifest){
         sourceBlock='\n\n--- FILE MANIFEST ('+ctx.total+' files) ---\n'+ctx.manifest.slice(0,20000);
         if(ctx.picked.length){
           sourceBlock+='\n\n--- SOURCE EXCERPTS (most relevant first) ---\n';
           for(const item of ctx.picked){
             sourceBlock+='\n### '+item.rel+'\n'+item.content+'\n';
+            ctxBytes+=item.content.length;
           }
         }
       }
+      write({type:"ask.context",files:ctx.picked.map(p=>p.rel),totalFiles:ctx.total,
+        filesIncluded:ctx.picked.length,contextChars:ctxBytes+Math.min(ctx.manifest.length,20000)});
       const prompt="You are answering a question about the Gulch game codebase and its running server. "
         +"The user is the operator. Answer in plain prose, concise, no code fences unless essential. "
         +"Base your answer on the SOURCE EXCERPTS below; cite file names and, where useful, line-level detail. "
@@ -2136,13 +2154,17 @@ function askSourceContext(question){
         +"If the answer requires a code change, say what would need to change and stop; the operator will use Task mode for that."
         +sourceBlock
         +"\n\nQuestion:\n"+question;
-      const result=await streamSourceTurn({prompt,root:ROOT,cwd:ROOT,timeoutMs:180000,effort:'low'});
+      const result=await streamSourceTurn({prompt,root:ROOT,cwd:ROOT,timeoutMs:180000,effort:'low',
+        onEvent:ev=>write(ev)});
       const answer=typeof result?.text==="string"?result.text.trim():"";
-      if(!answer)return send(res,502,{error:"The model returned an empty answer"});
-      return send(res,200,{ok:true,answer});
+      write({type:"ask.done",ok:!!answer,answerChars:answer.length,elapsedMs:Date.now()-t0,
+        empty:!answer});
     }catch(error){
-      return send(res,502,{error:"Ask failed: "+String(error?.message||error).slice(0,300)});
+      write({type:"error",message:String(error?.message||error).slice(0,300)});
+      write({type:"ask.done",ok:false,elapsedMs:Date.now()-t0});
     }
+    try{res.end();}catch{}
+    return;
   }
 
   if(req.method==="POST"&&["/api/move","/api/descend","/api/chat","/api/game-state","/api/retry"].includes(p)){

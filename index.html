@@ -2115,74 +2115,275 @@ $('repairAuto').addEventListener('click',()=>{$('repairStatus').textContent='Upd
  document.addEventListener('visibilitychange',()=>{if(document.hidden){finish('Sample stopped: page hidden');cancelRead();}});
  new MutationObserver(()=>{if(!authenticatedShell){finish('Sample stopped: sign-in required');cancelRead();timings.clear();results.replaceChildren();tasks.replaceChildren();offset=0;previous.disabled=next.disabled=true;taskStatus.textContent='Sign in to load tasks.';status.textContent='Sign in to measure builder responsiveness.';}}).observe($('gate'),{attributes:true,attributeFilter:['class']});
 })();
-/* Ask mode: read-only Q&A over the same codex lane. Task mode is untouched. */
+/* Ask overlay: ChatGPT-style modal streaming over /api/ask (SSE).
+   Reuses the existing app-server-stream event shapes:
+   thread.started | turn.started | source.delta | item.completed | turn.completed | error
+   plus ask.start / ask.context / ask.done from the route.
+   Task mode is untouched. */
 (function(){
 'use strict';
-const composer=document.getElementById('composer');
 const bar=document.getElementById('chatMode');
-const input=document.getElementById('input');
-if(!composer||!bar||!input)return;
-let mode='task';
-let askInFlight=false;
+if(!bar)return;
 
-function paint(){
- composer.dataset.mode=mode;
- for(const b of bar.querySelectorAll('button')) b.setAttribute('aria-selected',String(b.dataset.mode===mode));
- input.placeholder = mode==='ask'
-  ? 'Ask about the game or the code: "why does the camera lag behind movement?"'
-  : "Describe a change: 'add a wolf that hunts at night', 'make water deeper and slower'...";
- const btn=document.getElementById('send');
- if(btn) btn.textContent = mode==='ask' ? (askInFlight?'Asking…':'Ask') : 'Send';
+/* ---------- styles ---------- */
+const css=document.createElement('style');
+css.textContent=`
+#askOverlay{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;
+ background:rgba(4,6,4,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+#askOverlay.open{display:flex}
+#askPanel{width:min(860px,94vw);height:min(760px,90vh);display:flex;flex-direction:column;
+ background:#0a0d0a;border:1px solid #2b352a;border-radius:0;
+ font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#d7e0d2;
+ box-shadow:0 24px 80px rgba(0,0,0,.6)}
+#askHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #2b352a;flex:0 0 auto}
+#askHead .title{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#8b9a7d}
+#askHead .spacer{flex:1}
+#askHead .badge{font-size:11px;padding:2px 7px;border:1px solid #34402f;color:#9aa88c;border-radius:0}
+#askHead button{background:transparent;border:1px solid #34402f;color:#a9b89c;border-radius:0;
+ padding:4px 10px;font:11px/1 ui-monospace,monospace;cursor:pointer;text-transform:uppercase;letter-spacing:.08em}
+#askHead button:hover{border-color:var(--amber,#d8a13a);color:var(--amber,#d8a13a)}
+#askBody{flex:1;overflow:auto;padding:16px 18px;scroll-behavior:smooth}
+#askBody::-webkit-scrollbar{width:8px}#askBody::-webkit-scrollbar-thumb{background:#232b21}
+.ax{margin:0 0 18px}
+.ax .role{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#6f7d63;margin-bottom:5px}
+.ax.you .text{color:#c8d3c0;white-space:pre-wrap;word-break:break-word}
+.ax.bot .text{color:#e2ebdc;white-space:pre-wrap;word-break:break-word}
+.ax.bot .text:after{content:"";}
+.ax.live .cursor{display:inline-block;width:7px;height:14px;background:var(--amber,#d8a13a);
+ vertical-align:-2px;animation:blink 1s steps(2) infinite;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+.ax .trace{margin-top:10px;border-top:1px solid #1d241c;padding-top:8px;font-size:11px;color:#7d8a70}
+.ax .trace summary{cursor:pointer;color:#8b9a7d;letter-spacing:.06em;text-transform:uppercase;font-size:10px;outline:none}
+.ax .trace summary:hover{color:var(--amber,#d8a13a)}
+.ax .trace .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px 14px;margin-top:8px}
+.ax .trace .k{color:#69765e;font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+.ax .trace .v{color:#b9c7ae;font-size:11px;word-break:break-all}
+.ax .trace .files{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px}
+.ax .trace .files span{border:1px solid #2a3428;padding:1px 6px;font-size:10px;color:#8f9d82}
+.ax .trace .events{margin-top:8px;max-height:170px;overflow:auto;border:1px solid #1d241c;padding:6px 8px;background:#070907}
+.ax .trace .events div{font-size:10px;color:#7f8d73;white-space:pre-wrap;word-break:break-all;line-height:1.5}
+.ax.err .text{color:#e0a08a}
+#askFoot{flex:0 0 auto;border-top:1px solid #2b352a;padding:10px 14px;display:flex;gap:8px;align-items:flex-end}
+#askInput{flex:1;min-height:44px;max-height:140px;resize:none;background:#070907;border:1px solid #34402f;
+ border-radius:0;color:#dce5d6;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:10px}
+#askInput:focus{outline:none;border-color:var(--amber,#d8a13a)}
+#askSend{background:var(--amber,#d8a13a);color:#141505;border:0;border-radius:0;padding:0 18px;height:44px;
+ font:12px/1 ui-monospace,monospace;text-transform:uppercase;letter-spacing:.1em;cursor:pointer}
+#askSend:disabled{opacity:.45;cursor:default}
+#askNew{background:transparent;border:1px solid #34402f;color:#98a68b;border-radius:0;height:44px;padding:0 12px;
+ font:11px/1 ui-monospace,monospace;cursor:pointer;text-transform:uppercase;letter-spacing:.08em}
+`;
+document.head.appendChild(css);
+
+/* ---------- markup ---------- */
+const overlay=document.createElement('div');
+overlay.id='askOverlay';
+overlay.innerHTML=`
+ <div id="askPanel" role="dialog" aria-modal="true" aria-label="Ask Gulch">
+  <div id="askHead">
+   <span class="title">Ask</span>
+   <span class="badge" id="askModel">model —</span>
+   <span class="badge" id="askCtx">ctx —</span>
+   <span class="spacer"></span>
+   <button type="button" id="askClose">Esc</button>
+  </div>
+  <div id="askBody"></div>
+  <div id="askFoot">
+   <textarea id="askInput" placeholder="Ask about the game or the code — answers stream live, read-only."></textarea>
+   <button type="button" id="askNew">New</button>
+   <button type="button" id="askSend">Ask</button>
+  </div>
+ </div>`;
+document.body.appendChild(overlay);
+
+const body=document.getElementById('askBody');
+const input=document.getElementById('askInput');
+const sendBtn=document.getElementById('askSend');
+const modelBadge=document.getElementById('askModel');
+const ctxBadge=document.getElementById('askCtx');
+const panel=document.getElementById('askPanel');
+let busy=false;
+
+const esc=s=>String(s==null?'':s);
+
+function addAsk(role,text,cls){
+ const el=document.createElement('div');
+ el.className='ax '+role+(cls?' '+cls:'');
+ const r=document.createElement('div');r.className='role';
+ r.textContent=role==='you'?'you':'gulch';
+ const t=document.createElement('div');t.className='text';
+ t.textContent=esc(text);
+ el.append(r,t);body.appendChild(el);
+ body.scrollTop=body.scrollHeight;
+ return {el,t};
 }
-bar.addEventListener('click',e=>{
- const b=e.target.closest('button[data-mode]');if(!b)return;
- if(askInFlight)return;
- mode=b.dataset.mode==='ask'?'ask':'task';
- paint();
- if(mode==='task'){const p=document.getElementById('pend');if(p)p.replaceChildren();}
+
+function ensureTrace(el){
+ let d=el.querySelector('.trace');
+ if(d)return d;
+ d=document.createElement('details');d.className='trace';
+ d.innerHTML='<summary>trace</summary><div class="grid"></div><div class="files"></div><div class="events"></div>';
+ el.appendChild(d);
+ return d;
+}
+
+function setMeta(el,pairs){
+ const tr=ensureTrace(el);
+ const grid=tr.querySelector('.grid');
+ for(const [k,v] of Object.entries(pairs)){
+  const kw=document.createElement('div');kw.className='k';kw.textContent=k;
+  const vw=document.createElement('div');vw.className='v';vw.textContent=esc(v);
+  grid.append(kw,vw);
+ }
+}
+
+function logEvent(el,ev){
+ const tr=ensureTrace(el);
+ const box=tr.querySelector('.events');
+ const d=document.createElement('div');
+ const {type,...rest}=ev;
+ d.textContent=new Date().toISOString().slice(11,23)+'  '+type+'  '+JSON.stringify(rest).slice(0,300);
+ box.appendChild(d);box.scrollTop=box.scrollHeight;
+}
+
+function setFiles(el,names){
+ const tr=ensureTrace(el);
+ const box=tr.querySelector('.files');
+ box.replaceChildren();
+ for(const n of names.slice(0,30)){
+  const s=document.createElement('span');s.textContent=n;box.appendChild(s);
+ }
+ if(names.length>30){
+  const s=document.createElement('span');s.textContent='+'+(names.length-30)+' more';box.appendChild(s);
+ }
+}
+
+function open(){
+ overlay.classList.add('open');
+ setTimeout(()=>input.focus(),30);
+}
+function close(){overlay.classList.remove('open');}
+function reset(){body.replaceChildren();modelBadge.textContent='model —';ctxBadge.textContent='ctx —';}
+
+document.getElementById('askClose').addEventListener('click',close);
+document.getElementById('askNew').addEventListener('click',reset);
+overlay.addEventListener('click',e=>{if(e.target===overlay)close();});
+document.addEventListener('keydown',e=>{
+ if(e.key==='Escape'&&overlay.classList.contains('open'))close();
 });
 
-function appendAsk(role,text){
- const box=document.getElementById('msgs');
- const item=document.createElement('article');item.className='m ask';
- const author=document.createElement('div');author.className='a';
- const body=document.createElement('div');body.className='t';
- author.textContent=role==='you'?'you · ask':'gulch · answer';
- body.textContent=text;
- item.append(author,body);box.append(item);box.scrollTop=box.scrollHeight;
- return body;
-}
-
-input.addEventListener('keydown',e=>{
- if(mode!=='ask')return;
- if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();e.stopImmediatePropagation();void sendAsk();}
+/* Ask tab in the composer opens the overlay instead of sending */
+bar.addEventListener('click',e=>{
+ const b=e.target.closest('button[data-mode]');
+ if(b&&b.dataset.mode==='ask'){e.preventDefault();e.stopImmediatePropagation();open();}
 },true);
 
-const sendBtn=document.getElementById('send');
-sendBtn.addEventListener('click',e=>{
- if(mode!=='ask')return;
- e.preventDefault();e.stopImmediatePropagation();void sendAsk();
-},true);
-
-async function sendAsk(){
- if(askInFlight)return;
- const text=input.value.trim();if(!text)return;
- askInFlight=true;sendBtn.disabled=true;sendBtn.textContent='Asking…';
+/* ---------- streaming ---------- */
+async function ask(){
+ if(busy)return;
+ const text=input.value.trim();
+ if(!text)return;
+ busy=true;sendBtn.disabled=true;sendBtn.textContent='…';
  input.value='';
- appendAsk('you',text);
- const slot=appendAsk('gulch','…thinking');
+ addAsk('you',text);
+ const {el,t}=addAsk('bot','');
+ el.classList.add('live');
+ const cursor=document.createElement('span');cursor.className='cursor';t.appendChild(cursor);
+
+ const t0=performance.now();
+ let answer='';
+ let sawError=null;
+
  try{
-  const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
-  const data=await r.json().catch(()=>({}));
-  if(!r.ok||!data.ok)throw Error(data.error||('Ask failed ('+r.status+')'));
-  slot.textContent=data.answer;
+  const res=await fetch('/api/ask',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({text})
+  });
+  if(!res.ok){
+   const j=await res.json().catch(()=>({}));
+   throw Error(j.error||('HTTP '+res.status));
+  }
+  const reader=res.body.getReader();
+  const dec=new TextDecoder();
+  let buf='';
+  while(true){
+   const {done,value}=await reader.read();
+   if(done)break;
+   buf+=dec.decode(value,{stream:true});
+   let idx;
+   while((idx=buf.indexOf('\n\n'))!==-1){
+    const chunk=buf.slice(0,idx);buf=buf.slice(idx+2);
+    const line=chunk.split('\n').find(l=>l.startsWith('data: '));
+    if(!line)continue;
+    let ev;try{ev=JSON.parse(line.slice(6));}catch{continue;}
+    logEvent(el,ev);
+    switch(ev.type){
+     case 'ask.start': break;
+     case 'ask.context':
+      setFiles(el,ev.files||[]);
+      setMeta(el,{'context files':ev.filesIncluded+' / '+ev.totalFiles,
+                  'context chars':ev.contextChars});
+      ctxBadge.textContent='ctx '+Math.round((ev.contextChars||0)/1024)+'k';
+      break;
+     case 'thread.started':
+      if(ev.model)modelBadge.textContent=ev.model;
+      setMeta(el,{'thread':ev.threadId||'—','model':ev.model||'—'});
+      break;
+     case 'turn.started':
+      setMeta(el,{'turn':ev.turnId||'—'});
+      break;
+     case 'source.delta':
+      answer+=ev.text||'';
+      t.textContent=answer;
+      t.appendChild(cursor);
+      body.scrollTop=body.scrollHeight;
+      break;
+     case 'item.completed':
+      if(ev.text&&ev.text.length>answer.length){answer=ev.text;t.textContent=answer;t.appendChild(cursor);}
+      break;
+     case 'turn.completed':{
+      const u=ev.usage&&ev.usage.total;
+      setMeta(el,{
+       'status':ev.turnStatus||'—',
+       'tokens':u?(u.totalTokens+' ('+u.inputTokens+' in / '+u.outputTokens+' out)'):'—',
+       'elapsed':Math.round(performance.now()-t0)+'ms'
+      });
+      break;
+     }
+     case 'ask.done':
+      setMeta(el,{'total':(ev.elapsedMs||Math.round(performance.now()-t0))+'ms',
+                  'answer chars':ev.answerChars});
+      break;
+     case 'error':
+      sawError=ev.message||'error';
+      break;
+    }
+   }
+  }
  }catch(err){
-  slot.textContent='· '+(err.message||'Ask failed');
-  slot.style.color='#c98d6b';
+  sawError=err.message||String(err);
  }
- finally{askInFlight=false;sendBtn.disabled=false;sendBtn.textContent='Ask';paint();}
+
+ el.classList.remove('live');
+ if(cursor.parentNode)cursor.remove();
+
+ if(sawError){
+  el.classList.add('err');
+  if(!answer)t.textContent='· '+sawError; else t.textContent=answer+'\n\n· '+sawError;
+ }else if(!answer){
+  t.textContent='· no answer returned';
+  el.classList.add('err');
+ }
+
+ busy=false;sendBtn.disabled=false;sendBtn.textContent='Ask';
+ body.scrollTop=body.scrollHeight;
+ input.focus();
 }
-paint();
+
+sendBtn.addEventListener('click',()=>void ask());
+input.addEventListener('keydown',e=>{
+ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void ask();}
+});
 })();
 </script>
 </body>
