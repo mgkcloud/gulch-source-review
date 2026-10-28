@@ -29,6 +29,11 @@ const MAX_STDERR_BYTES=65536;
 // Notifications that must never reach the caller: private reasoning, plans, raw provider items.
 const INTERNAL_NOTIFICATION_PREFIXES=['item/reasoning/','item/plan/','rawResponse','turn/plan/','item/autoApprovalReview/','turn/diff/'];
 // Server->client requests we answer ourselves so nothing can ever hang waiting on us.
+// The only MCP server whose tool calls this lane may auto-approve. It is the
+// in-repo Gulch server (tools/gulch-mcp-server.mjs); everything else is declined.
+const GULCH_MCP_SERVER_NAME='gulch';
+const GULCH_MCP_APPROVAL={action:'accept',content:{}};
+const GULCH_MCP_DECLINE={action:'decline',content:{}};
 const APPROVAL_RESPONSES={
   'item/commandExecution/requestApproval':'decline',
   'item/fileChange/requestApproval':'decline',
@@ -130,6 +135,17 @@ export async function streamSourceTurn({prompt,images=[],outputSchema,cwd,root,o
   const session=new AppServerSession({
     cwd:work,codexHome,
     onServerRequest:msg=>{
+      // MCP tool calls arrive as elicitation requests. Approve only our own
+      // in-repo Gulch server; decline every other MCP server outright.
+      if(msg.method==='mcpServer/elicitation/request'){
+        const serverName=msg.params?.serverName;
+        const ok=serverName===GULCH_MCP_SERVER_NAME;
+        emit({type:'tool.approval',tool:'mcp',server:serverName||null,
+          toolName:msg.params?.meta?.codex_approval_kind||null,approved:ok});
+        session.child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:msg.id,
+          result:ok?GULCH_MCP_APPROVAL:GULCH_MCP_DECLINE})+'\n');
+        return;
+      }
       // approvals are disabled in this lane: answer decisively, never silently hang
       const answer=APPROVAL_RESPONSES[msg.method];
       const payload=answer!==undefined?answer:{};
@@ -148,6 +164,23 @@ export async function streamSourceTurn({prompt,images=[],outputSchema,cwd,root,o
         return;
       }
       // Tool activity: surface what the agent runs so the UI can show it.
+      if(msg.method==='item/started'&&p.item&&p.item.type==='mcpToolCall'){
+        emit({type:'tool.start',tool:'mcp',server:p.item.server||null,
+          toolName:p.item.tool||null,arguments:p.item.arguments||null,itemId:p.item.id||null});
+        return;
+      }
+      if(msg.method==='item/completed'&&p.item&&p.item.type==='mcpToolCall'){
+        const it=p.item;
+        let summary='';
+        try{
+          const first=it.result?.content?.[0]?.text;
+          if(typeof first==='string')summary=first.slice(0,2000);
+        }catch{}
+        emit({type:'tool.end',tool:'mcp',server:it.server||null,toolName:it.tool||null,
+          status:it.status||null,summary,
+          error:it.error?String(it.error.message||it.error).slice(0,400):null,itemId:it.id||null});
+        return;
+      }
       if(msg.method==='item/started'&&p.item&&p.item.type==='commandExecution'){
         const cmd=p.item.command||p.item.commandLine||'';
         emit({type:'tool.start',tool:'shell',command:String(cmd).slice(0,2000),itemId:p.item.id||null});
@@ -199,7 +232,7 @@ export async function streamSourceTurn({prompt,images=[],outputSchema,cwd,root,o
     await rpc('initialize',{clientInfo:{name:'gulch-seed',title:null,version:'1.0.0'},capabilities:null});
     session.notify('initialized');
     const thread=await rpc('thread/start',{
-      cwd:work,sandbox:'read-only',approvalPolicy:'never',ephemeral:true,
+      cwd:work,sandbox:'read-only',approvalPolicy:(tools===true?'on-request':'never'),ephemeral:true,
       config:{model_provider:'openai',web_search:'disabled',
         features:{shell_tool:tools===true,apply_patch_freeform:false}}});
     threadId=thread?.thread?.id||threadId;
