@@ -390,6 +390,44 @@ function predictionBridge(event) {
     !d.data||typeof d.data!=='object'||d.scope&&d.scope!=='gameplay'){
     finish('rejected',409,'State changed; action rejected. Please try again.');return;
   }
+  // Ordered authority fences the legacy whole-world write server-side, so replay the
+  // action the player actually pressed as an ordered command instead. Without this the
+  // browser game cannot move at all once command mode engages.
+  if(ORDERED_RUNTIME.enabled&&d.type==='gulch:commit'){
+    const pressed=window.__gulchAction;
+    if(!pressed||Date.now()-pressed.at>5000){
+      // No player action behind this commit (world tick, reconcile, or a retry).
+      // There is nothing to order, so confirm against the authoritative snapshot and
+      // let the next broadcast reconcile the client, instead of surfacing an error.
+      window.__gulchAction=null;
+      finish('accepted',200,null,snapshot());
+      return;
+    }
+    window.__gulchAction=null;
+    const st=window.__gulchStream||(window.__gulchStream={
+      streamId:(typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():'s-'+Date.now()+'-'+Math.random().toString(36).slice(2)),seq:0});
+    const env={version:1,worldEpoch:ORDERED_RUNTIME.worldEpoch,sourceRevision:d.revision,
+      streamId:st.streamId,clientSequence:st.seq,opId:(typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function'
+        ?crypto.randomUUID()
+        :(function(){const h=()=>Math.floor(Math.random()*0x10000).toString(16).padStart(4,'0');
+          return h()+h()+'-'+h()+'-4'+h().slice(1)+'-a'+h().slice(1)+'-'+h()+h()+h();})()),
+      action:pressed.action};
+    st.seq++;
+    const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),5000);
+    fetch('/api/ordered-command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(env),signal:ctrl.signal})
+      .then(async r=>{const v=await r.json().catch(()=>({}));
+        if(r.ok&&v.ok===true){
+          finish('accepted',200,null,{gameState:d.data,stateRevision:v.stateRevision,revision:d.revision,clients:SNAP?SNAP.clients:0});
+        }else{
+          // A sequence gap means our local stream drifted; start a clean stream next turn.
+          if(v.gap||v.staleSequence){st.streamId=(typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():'s-'+Date.now());st.seq=0;}
+          finish('rejected',r.status||409,v.error||'Ordered command rejected');
+        }})
+      .catch(e=>finish('rejected',409,String(e&&e.message||e)))
+      .finally(()=>clearTimeout(timer));
+    return;
+  }
+
   let payload;
   try {
     if(JSON.stringify(d.data).length>200000)throw Error('Game state exceeds limit');
@@ -2152,14 +2190,19 @@ function askSourceContext(question){
           +'Every component needs an id; the tree root must have id "root"; containers '
           +'reference children by id array. Keep prose above the block; do not repeat '
           +'the prose inside the block. Omit the block entirely for simple answers.';
-        sourceBlock+='\n\nTASK OPTIONS: when the user asks for something that could be built '
-          +'and you can identify concrete options, DO NOT queue it yourself. Instead '
-          +'offer them as clickable chips by appending ONE fenced block tagged '
-          +'gulch-options containing a JSON array. Each item: '
+        sourceBlock+='\n\nANSWERING COMES FIRST. Always answer the question in full prose, '
+          +'however long the answer needs to be. Most turns are questions: explain, compare, '
+          +'diagnose, cite files. Never shrink an answer to make room for anything below. '
+          +'Never reply with only a task suggestion.';
+        sourceBlock+='\n\nTASK OPTIONS (optional, additive): ONLY when the user is asking you to '
+          +'CHANGE or BUILD something, and only after you have given the full answer, you may '
+          +'append ONE fenced block tagged gulch-options containing a JSON array of 2-4 '
+          +'genuinely different ways to do it. Each item: '
           +'{"text":"<precise change request the editor can act on>",'
           +'"scope":"gameplay|game-ui|build-tools",'
-          +'"rationale":"<8 words why>"}. Give 2-4 genuinely different options. '
-          +'Keep your prose to one short line above the block.';
+          +'"rationale":"<8 words why>"}. '
+          +'Do NOT emit this block for a question that only wants an explanation, an opinion, '
+          +'a diagnosis, or a read-only review. If in doubt, omit it and just answer.';
         sourceBlock+='\n\nTASK CARD: after you have queued a task with create_task, '
           +'append ONE fenced block tagged gulch-task containing '
           +'{"taskId":<id>,"scope":"<scope>","text":"<request>"} so the user gets a '
