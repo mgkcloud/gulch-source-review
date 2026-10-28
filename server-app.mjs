@@ -2152,6 +2152,17 @@ function askSourceContext(question){
     const question=typeof b.text==="string"?b.text.trim():"";
     if(!question)return send(res,400,{error:"Question must not be empty"});
     if(question.length>6000)return send(res,400,{error:"Question is too long; keep it under 6000 characters"});
+    // Prior turns, so a follow-up keeps its referents. Bounded: newest 12 turns
+    // and 12000 characters total, oldest dropped first.
+    const history=Array.isArray(b.history)?b.history
+      .filter(m=>m&&typeof m.text==="string"&&m.text.trim()&&(m.role==="user"||m.role==="assistant"))
+      .slice(-12):[];
+    let transcript="",historyChars=0;
+    for(let i=history.length-1;i>=0;i--){
+      const line=(history[i].role==="user"?"Operator: ":"You: ")+history[i].text.trim().slice(0,4000)+"\n";
+      if(historyChars+line.length>12000)break;
+      transcript=line+transcript;historyChars+=line.length;
+    }
     res.writeHead(200,{
       "Content-Type":"text/event-stream",
       "Cache-Control":"no-cache, no-transform",
@@ -2165,7 +2176,7 @@ function askSourceContext(question){
       if(closed)return;
       try{res.write("data: "+JSON.stringify({at:Date.now()-t0,...ev})+"\n\n");}catch{closed=true;}
     };
-    write({type:"ask.start",question,questionChars:question.length});
+    write({type:"ask.start",question,questionChars:question.length,historyTurns:history.length,historyChars});
     try{
       const {streamSourceTurn}=await import('./app-server-stream.mjs');
       let ctx;
@@ -2218,6 +2229,7 @@ function askSourceContext(question){
         +"You are in a READ-ONLY sandbox: do not propose file edits, do not emit a patch, do not ask for confirmation to change anything. "
         +"If the answer requires a code change, say what would need to change and stop; the operator will use Task mode for that."
         +sourceBlock
+        +(transcript?"\n\nCONVERSATION SO FAR (oldest first; treat the last assistant line as your own previous answer):\n"+transcript:"")
         +"\n\nQuestion:\n"+question;
       const result=await streamSourceTurn({prompt,root:ROOT,cwd:ROOT,timeoutMs:180000,effort:'low',tools:true,
         onEvent:ev=>write(ev)});

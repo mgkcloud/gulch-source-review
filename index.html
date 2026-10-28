@@ -2597,6 +2597,7 @@ h1.a2ui-heading{font-size:20px}h2.a2ui-heading{font-size:17px}h3.a2ui-heading{fo
  padding:4px 9px;cursor:pointer;min-height:26px}
 .gw-task-open:hover{border-color:var(--amber,#d8a13a);color:var(--amber,#d8a13a)}
 .gw-task-head{cursor:pointer}
+#askSend.stopping,#sendBtn.stopping{border-color:#7a4a3a;color:#e0a08a}
 .gw-task-text{margin-top:7px;font-size:12px;line-height:1.55;color:#a8b69c;
  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .gw-task.open .gw-task-text{-webkit-line-clamp:unset;display:block}
@@ -3271,14 +3272,24 @@ async function create(text){
  }
 }
 
+/* Conversation state: the client owns the thread, and sends its recent turns so
+   follow-ups keep their referents. Also holds the in-flight abort handle. */
+const chatTurns=[];
+let askAbort=null;
+
+function chatHistory(){
+ return chatTurns.slice(-12).map(m=>({role:m.role,text:m.text}));
+}
+
 async function ask(){
  if(busy)return;
  const text=input.value.trim();
  if(!text)return;
  if(askMode==='create'){return create(text);}
- busy=true;sendBtn.disabled=true;sendBtn.textContent='…';
+ busy=true;sendBtn.disabled=false;sendBtn.textContent='Stop';try{sendBtn.classList.add('stopping');}catch{}
  input.value='';
  addAsk('you',text);
+ chatTurns.push({role:'user',text});
  const {el,t}=addAsk('bot','');
  el.dataset.prompt=text;
  el.classList.add('live');
@@ -3290,9 +3301,11 @@ async function ask(){
  const t2raw=()=>answer;
 
  try{
+  askAbort=new AbortController();
   const res=await fetch('/api/ask',{
    method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({text})
+   body:JSON.stringify({text,history:chatHistory()}),
+   signal:askAbort.signal
   });
   if(!res.ok){
    const j=await res.json().catch(()=>({}));
@@ -3357,7 +3370,8 @@ async function ask(){
    }
   }
  }catch(err){
-  sawError=err.message||String(err);
+  if(err&&err.name==='AbortError'){sawError=null;if(!answer)answer='· stopped';}
+  else sawError=err.message||String(err);
  }
 
  el.classList.remove('live');
@@ -3366,16 +3380,21 @@ async function ask(){
  // A2UI / task widgets: strip the fenced control blocks from the prose,
  // then mount the interactive parts underneath the answer.
  el.dataset.raw=answer;
- const gwHost=el.querySelector('.col')||el;
- const hadWidgets=gwRenderWidgets(gwHost,answer||'');
- const prose=gwStripWidgets(answer||'');
- if(prose.indexOf('```a2ui')!==-1){
-  renderMD(t,stripA2UI(prose));
-  try{ A2UI.renderInto(el,t2raw()); }catch{}
- }else{
-  renderMD(t,prose);
+ try{
+  const gwHost=el.querySelector('.col')||el;
+  const hadWidgets=gwRenderWidgets(gwHost,answer||'');
+  const prose=gwStripWidgets(answer||'');
+  if(prose.indexOf('```a2ui')!==-1){
+   renderMD(t,stripA2UI(prose));
+   try{ A2UI.renderInto(el,t2raw()); }catch{}
+  }else{
+   renderMD(t,prose);
+  }
+  if(hadWidgets&&!prose)t.style.display='none';
+ }catch(renderError){
+  // A rendering fault must never swallow the answer or lock the input.
+  try{ t.textContent=answer||('· '+(renderError.message||renderError)); }catch{}
  }
- if(hadWidgets&&!prose)t.style.display='none';
  // regenerate affordance on the newest assistant turn
  try{
   for(const old of document.querySelectorAll('#askBody .ax .acts .regen'))old.remove();
@@ -3393,13 +3412,23 @@ async function ask(){
   el.classList.add('err');
  }
 
- busy=false;sendBtn.disabled=false;sendBtn.textContent='Ask';
- body.scrollTop=body.scrollHeight;
- input.focus();
+ // Remember the assistant turn so the next message has context.
+ if(answer&&!sawError)chatTurns.push({role:'assistant',text:answer});
+
+ // Guaranteed reset. Nothing above may leave the composer stranded.
+ askAbort=null;
+ busy=false;
+ try{sendBtn.disabled=false;}catch{}
+ try{sendBtn.textContent=askMode==='create'?'Create':'Ask';}catch{}
+ try{body.scrollTop=body.scrollHeight;}catch{}
+ try{input.focus();}catch{}
 }
 
 paintMode();
-sendBtn.addEventListener('click',()=>void ask());
+sendBtn.addEventListener('click',()=>{
+ if(busy){try{askAbort&&askAbort.abort();}catch{}return;}
+ void ask();
+});
 input.addEventListener('keydown',e=>{
  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void ask();}
 });
