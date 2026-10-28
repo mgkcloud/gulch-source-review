@@ -2498,6 +2498,43 @@ h1.a2ui-heading{font-size:20px}h2.a2ui-heading{font-size:17px}h3.a2ui-heading{fo
 
 /* ---- ChatGPT-style thread ---- */
 #askBody{scroll-behavior:smooth}
+
+/* ── ChatGPT-shaped thread surface ─────────────────────────────────── */
+#askPanel{display:grid;grid-template-columns:220px 1fr;grid-template-rows:1fr}
+#askRail{grid-column:1;display:flex;flex-direction:column;min-height:0;
+ border-right:1px solid #2b352a;background:#080a08}
+#askRail.collapsed{display:none}
+#askMain{grid-column:2;display:flex;flex-direction:column;min-height:0;min-width:0}
+#askRail .railhead{display:flex;gap:6px;padding:8px;border-bottom:1px solid #2b352a}
+#askRail .railhead button{flex:1;background:#101610;border:1px solid #34402f;color:#cfd9c6;
+ padding:7px 9px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;border-radius:0}
+#askRail .railhead button:hover{border-color:var(--amber,#d8a13a);color:var(--amber,#d8a13a)}
+#askChats{flex:1;overflow:auto;padding:6px}
+#askChats::-webkit-scrollbar{width:8px}#askChats::-webkit-scrollbar-thumb{background:#232b21}
+.axchat{display:flex;align-items:center;gap:6px;padding:7px 8px;cursor:pointer;
+ border:1px solid transparent;color:#a9b89c;font-size:12px;line-height:1.3}
+.axchat:hover{background:#101610;border-color:#2b352a}
+.axchat[aria-current=true]{background:#101610;border-color:#3f5a35;color:#e2ebdc}
+.axchat .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.axchat .del{flex:0 0 auto;background:none;border:0;color:#5c6a52;cursor:pointer;
+ font-size:14px;line-height:1;padding:0 2px;opacity:0}
+.axchat:hover .del{opacity:1}
+.axchat .del:hover{color:#e0705a}
+#askRail .railfoot{padding:6px 8px;border-top:1px solid #2b352a;font-size:10px;
+ color:#6b7960;letter-spacing:.08em;text-transform:uppercase}
+#askJump{position:absolute;right:26px;bottom:96px;width:34px;height:34px;border-radius:50%;
+ background:#101610;border:1px solid #34402f;color:#cfd9c6;cursor:pointer;display:none;
+ align-items:center;justify-content:center;font-size:14px;z-index:5}
+#askJump:hover{border-color:var(--amber,#d8a13a);color:var(--amber,#d8a13a)}
+#askPanel{position:relative}
+.axtip{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 2px}
+.axtip button{background:#0b0f0b;border:1px solid #2b352a;color:#a9b89c;padding:8px 11px;
+ font-size:12px;cursor:pointer;border-radius:0;text-align:left}
+.axtip button:hover{border-color:var(--amber,#d8a13a);color:var(--amber,#d8a13a)}
+.axempty{color:#6b7960;font-size:13px;padding:22px 4px}
+.axempty b{color:#cfd9c6;display:block;font-size:15px;margin-bottom:6px;font-weight:600}
+#askInput{overflow-y:auto}
+
 .ax{display:flex;gap:10px;margin:0 0 22px;align-items:flex-start}
 .ax .av{flex:0 0 26px;width:26px;height:26px;border:1px solid #2b352a;display:flex;
  align-items:center;justify-content:center;font-size:10px;letter-spacing:.06em;
@@ -2649,6 +2686,12 @@ const overlay=document.createElement('div');
 overlay.id='askOverlay';
 overlay.innerHTML=`
  <div id="askPanel" role="dialog" aria-modal="true" aria-label="Ask Gulch">
+  <div id="askRail">
+   <div class="railhead"><button type="button" id="askNewChat">+ New chat</button></div>
+   <div id="askChats"></div>
+   <div class="railfoot">saved in this browser</div>
+  </div>
+  <div id="askMain">
   <div id="askHead">
    <span class="title" id="askTitle">Ask</span>
    <div class="modes" role="tablist" aria-label="Mode">
@@ -2670,6 +2713,7 @@ overlay.innerHTML=`
    <textarea id="askInput" placeholder="Ask about the game or the code — answers stream live, read-only."></textarea>
    <button type="button" id="askNew">New</button>
    <button type="button" id="askSend">Ask</button>
+  </div>
   </div>
  </div>`;
 document.body.appendChild(overlay);
@@ -3129,6 +3173,9 @@ function addAsk(role,text,cls){
   const cp=document.createElement('button');cp.type='button';cp.textContent='Copy';
   cp.addEventListener('click',()=>copyPlain(el.dataset.raw||'',cp));
   acts.appendChild(cp);
+  const rg=document.createElement('button');rg.type='button';rg.textContent='Regenerate';
+  rg.addEventListener('click',()=>regenerate());
+  acts.appendChild(rg);
  }
  if(acts.children.length)col.appendChild(acts);
  body.appendChild(el);
@@ -3184,7 +3231,9 @@ function close(){overlay.classList.remove('open');}
 function reset(){body.replaceChildren();modelBadge.textContent='model —';ctxBadge.textContent='ctx —';}
 
 document.getElementById('askClose').addEventListener('click',close);
-document.getElementById('askNew').addEventListener('click',reset);
+document.getElementById('askNew').addEventListener('click',()=>{
+ if(busy)return;ChatStore.newChat();
+});
 overlay.addEventListener('click',e=>{if(e.target===overlay)close();});
 document.addEventListener('keydown',e=>{
  if(e.key==='Escape'&&overlay.classList.contains('open'))close();
@@ -3276,6 +3325,7 @@ async function create(text){
    follow-ups keep their referents. Also holds the in-flight abort handle. */
 const chatTurns=[];
 let askAbort=null;
+let replayText=null;
 
 function chatHistory(){
  return chatTurns.slice(-12).map(m=>({role:m.role,text:m.text}));
@@ -3283,13 +3333,18 @@ function chatHistory(){
 
 async function ask(){
  if(busy)return;
- const text=input.value.trim();
+ let text=replayText!==null?replayText:input.value.trim();
  if(!text)return;
  if(askMode==='create'){return create(text);}
+ const isReplay=replayText!==null;
+ if(isReplay){text=replayText;replayText=null;}
  busy=true;sendBtn.disabled=false;sendBtn.textContent='Stop';try{sendBtn.classList.add('stopping');}catch{}
  input.value='';
- addAsk('you',text);
- chatTurns.push({role:'user',text});
+ if(!isReplay){
+  addAsk('you',text);
+  chatTurns.push({role:'user',text});
+  ChatStore.record('user',text);
+ }
  const {el,t}=addAsk('bot','');
  el.dataset.prompt=text;
  el.classList.add('live');
@@ -3413,13 +3468,17 @@ async function ask(){
  }
 
  // Remember the assistant turn so the next message has context.
- if(answer&&!sawError)chatTurns.push({role:'assistant',text:answer});
+ if(answer&&!sawError){
+  chatTurns.push({role:'assistant',text:answer});
+  ChatStore.record('assistant',answer);
+ }
 
  // Guaranteed reset. Nothing above may leave the composer stranded.
  askAbort=null;
  busy=false;
  try{sendBtn.disabled=false;}catch{}
  try{sendBtn.textContent=askMode==='create'?'Create':'Ask';}catch{}
+ try{sendBtn.classList.remove('stopping');}catch{}
  try{body.scrollTop=body.scrollHeight;}catch{}
  try{input.focus();}catch{}
 }
@@ -3432,6 +3491,160 @@ sendBtn.addEventListener('click',()=>{
 input.addEventListener('keydown',e=>{
  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void ask();}
 });
+
+/* ── Conversation store: chats survive reload, like a real chat app ───── */
+const CHAT_KEY='gulch-chats-v1';
+const ChatStore=(()=>{
+ const uid=()=>'c'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+ let state={chats:[],activeId:null};
+
+ function load(){
+  try{
+   const raw=localStorage.getItem(CHAT_KEY);
+   if(raw){
+    const p=JSON.parse(raw);
+    if(p&&Array.isArray(p.chats)){state.chats=p.chats.filter(c=>c&&Array.isArray(c.turns));state.activeId=p.activeId||null;}
+   }
+  }catch{}
+  if(!state.chats.length)newChat(false);
+  if(!state.chats.some(c=>c.id===state.activeId))state.activeId=state.chats[state.chats.length-1].id;
+ }
+ function save(){
+  try{localStorage.setItem(CHAT_KEY,JSON.stringify(state));}catch{}
+ }
+ function active(){return state.chats.find(c=>c.id===state.activeId)||null;}
+ function title(t){
+  const s=String(t||'').replace(/\s+/g,' ').trim();
+  if(!s)return 'New chat';
+  return s.length>34?s.slice(0,34)+'…':s;
+ }
+ function newChat(touch=true){
+  const c={id:uid(),title:'New chat',at:Date.now(),turns:[]};
+  state.chats.unshift(c);state.activeId=c.id;save();
+  if(touch){renderRail();renderChat();}
+  return c;
+ }
+ function remove(id){
+  const i=state.chats.findIndex(c=>c.id===id);
+  if(i<0)return;
+  state.chats.splice(i,1);
+  if(!state.chats.length)newChat(false);
+  if(state.activeId===id)state.activeId=state.chats[0].id;
+  save();renderRail();renderChat();
+ }
+ function record(role,text){
+  const c=active()||newChat(false);
+  c.turns.push({role,text:String(text==null?'':text),at:Date.now()});
+  if(role==='user'&&c.title==='New chat')c.title=title(text);
+  save();renderRail();
+ }
+ /** Drop trailing assistant turns so the last thing said is the user's ask. */
+ function dropTrailingAnswers(){
+  const c=active();if(!c)return null;
+  while(c.turns.length&&c.turns[c.turns.length-1].role==='assistant')c.turns.pop();
+  const last=c.turns[c.turns.length-1];
+  save();
+  return last&&last.role==='user'?last.text:null;
+ }
+ function renderRail(){
+  const host=document.getElementById('askChats');
+  if(!host)return;
+  host.replaceChildren();
+  for(const c of state.chats){
+   const row=document.createElement('div');
+   row.className='axchat';row.setAttribute('aria-current',String(c.id===state.activeId));
+   const lbl=document.createElement('span');lbl.className='lbl';lbl.textContent=c.title||'New chat';
+   const del=document.createElement('button');del.type='button';del.className='del';del.textContent='×';
+   del.title='Delete chat';
+   del.addEventListener('click',ev=>{ev.stopPropagation();remove(c.id);});
+   row.append(lbl,del);
+   row.addEventListener('click',()=>{
+    if(busy)return;
+    state.activeId=c.id;save();renderRail();renderChat();
+   });
+   host.appendChild(row);
+  }
+ }
+ function renderChat(){
+  const c=active();
+  body.replaceChildren();
+  modelBadge.textContent='model —';ctxBadge.textContent='ctx —';
+  if(!c||!c.turns.length){renderEmpty();return;}
+  for(const t of c.turns){
+   if(t.role==='user')addAsk('you',t.text);
+   else addAsk('bot',t.text);
+  }
+  body.scrollTop=body.scrollHeight;
+ }
+ function renderEmpty(){
+  const wrap=document.createElement('div');
+  const head=document.createElement('div');head.className='axempty';
+  const b=document.createElement('b');b.textContent='What are we working on?';
+  head.append(b,document.createTextNode('Ask about the game or the code. Answers stream live.'));
+  wrap.appendChild(head);
+  const tips=document.createElement('div');tips.className='axtip';
+  for(const q of [
+   'What does the movement engine actually do?',
+   'How do ordered commands reach the server?',
+   'Where is the task queue implemented?',
+   'What are a few options for improving the camera?'
+  ]){
+   const btn=document.createElement('button');btn.type='button';btn.textContent=q;
+   btn.addEventListener('click',()=>{if(busy)return;input.value=q;input.dispatchEvent(new Event('input'));void ask();});
+   tips.appendChild(btn);
+  }
+  wrap.appendChild(tips);
+  body.appendChild(wrap);
+ }
+ function setRailVisible(on){
+  const rail=document.getElementById('askRail');
+  if(rail)rail.classList.toggle('collapsed',!on);
+  panel.style.gridTemplateColumns=on?'220px 1fr':'1fr';
+ }
+ return {load,save,active,newChat,remove,record,dropTrailingAnswers,renderRail,renderChat,setRailVisible,
+  get chats(){return state.chats;}};
+})();
+
+/* Auto-grow composer */
+function autoGrow(){
+ input.style.height='auto';
+ input.style.height=Math.min(input.scrollHeight,140)+'px';
+}
+input.addEventListener('input',autoGrow);
+
+/* Jump-to-latest */
+(function(){
+ const jump=document.createElement('button');
+ jump.type='button';jump.id='askJump';jump.textContent='↓';jump.title='Jump to latest';
+ panel.appendChild(jump);
+ jump.addEventListener('click',()=>{body.scrollTop=body.scrollHeight;});
+ body.addEventListener('scroll',()=>{
+  const gap=body.scrollHeight-body.scrollTop-body.clientHeight;
+  jump.style.display=gap>120?'flex':'none';
+ });
+})();
+
+/* Regenerate: re-run the newest ask in place */
+function regenerate(){
+ if(busy)return;
+ const lastUser=ChatStore.dropTrailingAnswers();
+ if(!lastUser)return;
+ ChatStore.renderChat();
+ chatTurns.length=0;
+ const c=ChatStore.active();
+ if(c)for(const t of c.turns.slice(0,-1))chatTurns.push({role:t.role,text:t.text});
+ replayText=lastUser;
+ void ask();
+}
+
+/* Boot */
+ChatStore.load();
+ChatStore.renderRail();
+ChatStore.renderChat();
+document.getElementById('askNewChat').addEventListener('click',()=>{
+ if(busy)return;ChatStore.newChat();
+});
+
 })();
 </script>
 </body>
