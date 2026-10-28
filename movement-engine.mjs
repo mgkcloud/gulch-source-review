@@ -3,6 +3,12 @@ import {createHash} from 'node:crypto';
 
 const failure=(status,message)=>Object.assign(new Error(message),{status});
 
+// Execution ceiling for one simulated turn. Diagnostics and the parent-side
+// validator both read this constant, so a reported limit can never disagree
+// with the limit actually enforced.
+const EXEC_LIMIT_MS=4000;
+const EXEC_TIMEOUT_MESSAGE='Script execution timed out after '+EXEC_LIMIT_MS+'ms';
+
 function previewParity(){
   const epoch=d=>String(d?.respawnSettings?.token||'original');
   const number=n=>Number.isFinite(n)?Math.max(0,Math.floor(n)):0;
@@ -260,7 +266,7 @@ function simulationWorker(){
       if(['Error','TypeError','RangeError','ReferenceError','SyntaxError','EvalError','URIError'].includes(n))name=n;
       else if(error instanceof SyntaxError)name='SyntaxError';
     }catch{}
-    return {diagnostic:{stage,previousStage,intervals:intervals.map(({name,ms})=>({name,ms})),elapsedInStageMs:milliseconds(stageStarted),errorName:name,errorMessage:timeout?'Script execution timed out after 100ms':name+' during movement simulation (message redacted)',elapsedMs:milliseconds(started),limitMs:100}};
+    return {diagnostic:{stage,previousStage,intervals:intervals.map(({name,ms})=>({name,ms})),elapsedInStageMs:milliseconds(stageStarted),errorName:name,errorMessage:timeout?EXEC_TIMEOUT_MESSAGE:name+' during movement simulation (message redacted)',elapsedMs:milliseconds(started),limitMs:EXEC_LIMIT_MS}};
   }
   const specs=[['core','source'],['progression','effectsSource'],['living','livingSource'],['cave','caveSource'],['enemy','varietySource'],['village','villageSource'],['construction','constructionSource'],['cartography','cartographySource'],['hazard','hazardSource']];
   const scripts={};
@@ -275,7 +281,7 @@ function simulationWorker(){
       if(validation)Object.defineProperty(context,'__gulchDiagnosticStage',{set:stageSetter,configurable:false,enumerable:false});
       for(const name of ['core','cave','enemy','living','progression','village','construction','hazard','cartography']){
         markStage(name==='enemy'?'enemy-init':name);
-        scripts[name].runInContext(context,{timeout:4000});
+        scripts[name].runInContext(context,{timeout:EXEC_LIMIT_MS});
       }
       markStage('input');
       const input=JSON.stringify(message.input);
@@ -347,7 +353,7 @@ function simulationWorker(){
           'prediction={...prediction,data:chanceResult.data,activity:chanceResult.activity};}'+
         mark('stringify')+'const result=JSON.stringify(prediction);'+
         'if(typeof result!=="string"||result.length>250000)throw Error("Invalid prediction");return result;})()');
-      const result=script.runInContext(context,{timeout:4000});
+      const result=script.runInContext(context,{timeout:EXEC_LIMIT_MS});
       parentPort.postMessage({id:message.id,result});
     }catch(error){parentPort.postMessage({id:message.id,failed:true,...diagnostic(error)});}
   });
@@ -455,7 +461,9 @@ export function createMovementPreview({validation=false}={}){
     if(pending.size>=4)return Promise.reject(failure(503,'Movement preview capacity reached; retry shortly'));
     if(!worker){
       try{
-        const current=new Worker('const previewParity='+previewParity.toString()+';('+simulationWorker.toString()+')()',{
+        // The worker is evaluated from a source string, so it cannot see this module's
+// top-level constants; inject them or its diagnostics would reference undefined names.
+const current=new Worker('const EXEC_LIMIT_MS='+EXEC_LIMIT_MS+';const EXEC_TIMEOUT_MESSAGE='+JSON.stringify(EXEC_TIMEOUT_MESSAGE)+';const previewParity='+previewParity.toString()+';('+simulationWorker.toString()+')()',{
           eval:true,workerData:{source,effectsSource,livingSource,caveSource,varietySource,villageSource,constructionSource,cartographySource,hazardSource,validation},env:{},execArgv:[],
           resourceLimits:{maxOldGenerationSizeMb:32,maxYoungGenerationSizeMb:8,stackSizeMb:2}
         });
@@ -469,14 +477,14 @@ export function createMovementPreview({validation=false}={}){
             const names=['Error','TypeError','RangeError','ReferenceError','SyntaxError','EvalError','URIError'];
             if(validation&&d&&stages.includes(d.stage)&&stages.includes(d.previousStage)&&names.includes(d.errorName)&&
               Number.isSafeInteger(d.elapsedInStageMs)&&d.elapsedInStageMs>=0&&d.elapsedInStageMs<=60000&&
-              Number.isSafeInteger(d.elapsedMs)&&d.elapsedMs>=0&&d.elapsedMs<=60000&&d.elapsedInStageMs<=d.elapsedMs&&d.limitMs===100&&
+              Number.isSafeInteger(d.elapsedMs)&&d.elapsedMs>=0&&d.elapsedMs<=60000&&d.elapsedInStageMs<=d.elapsedMs&&d.limitMs===EXEC_LIMIT_MS&&
               Array.isArray(d.intervals)&&d.intervals.length<=24&&
               d.intervals.every(interval=>interval&&typeof interval==='object'&&!Array.isArray(interval)&&
                 Object.keys(interval).length===2&&Object.hasOwn(interval,'name')&&Object.hasOwn(interval,'ms')&&
                 stages.includes(interval.name)&&Number.isSafeInteger(interval.ms)&&interval.ms>=0&&interval.ms<=d.elapsedMs)&&
               (!d.intervals.length||d.intervals.at(-1).name===d.previousStage)&&
-              (d.errorMessage==='Script execution timed out after 100ms'||d.errorMessage===d.errorName+' during movement simulation (message redacted)')){
-              error.diagnostic={stage:d.stage,previousStage:d.previousStage,intervals:d.intervals.map(({name,ms})=>({name,ms})),elapsedInStageMs:d.elapsedInStageMs,errorName:d.errorName,errorMessage:d.errorMessage,elapsedMs:d.elapsedMs,limitMs:100};
+              (d.errorMessage===EXEC_TIMEOUT_MESSAGE||d.errorMessage===d.errorName+' during movement simulation (message redacted)')){
+              error.diagnostic={stage:d.stage,previousStage:d.previousStage,intervals:d.intervals.map(({name,ms})=>({name,ms})),elapsedInStageMs:d.elapsedInStageMs,errorName:d.errorName,errorMessage:d.errorMessage,elapsedMs:d.elapsedMs,limitMs:EXEC_LIMIT_MS};
             }
             if(message.failed){
               const entry=pending.get(message.id);
