@@ -2152,6 +2152,18 @@ function askSourceContext(question){
           +'Every component needs an id; the tree root must have id "root"; containers '
           +'reference children by id array. Keep prose above the block; do not repeat '
           +'the prose inside the block. Omit the block entirely for simple answers.';
+        sourceBlock+='\n\nTASK OPTIONS: when the user asks for something that could be built '
+          +'and you can identify concrete options, DO NOT queue it yourself. Instead '
+          +'offer them as clickable chips by appending ONE fenced block tagged '
+          +'gulch-options containing a JSON array. Each item: '
+          +'{"text":"<precise change request the editor can act on>",'
+          +'"scope":"gameplay|game-ui|build-tools",'
+          +'"rationale":"<8 words why>"}. Give 2-4 genuinely different options. '
+          +'Keep your prose to one short line above the block.';
+        sourceBlock+='\n\nTASK CARD: after you have queued a task with create_task, '
+          +'append ONE fenced block tagged gulch-task containing '
+          +'{"taskId":<id>,"scope":"<scope>","text":"<request>"} so the user gets a '
+          +'live progress card in the thread. Do not also list the id in prose.';
         if(ctx.picked.length)ctxBytes=0;
       }
       write({type:"ask.context",files:ctx.picked.map(p=>p.rel),totalFiles:ctx.total,
