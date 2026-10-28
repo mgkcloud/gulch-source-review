@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gulch game</title>
+<style>
+:root{
+  --ink:#0b0d0c; --panel:#12150f; --line:#252a1f; --fg:#d8e0c8; --dim:#7d8a6a;
+  --amber:#ffcc66;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--ink);color:var(--fg);
+  font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden}
+#left{position:relative;min-width:0;height:100%;width:100%;overflow:hidden;background:var(--ink)}
+#board{position:absolute;inset:0;display:block;image-rendering:pixelated}
+#hud{position:absolute;top:0;left:0;right:0;padding:8px 12px;background:linear-gradient(#0b0d0cec,#0b0d0c00);
+  display:flex;gap:18px;align-items:baseline;font-size:12px;letter-spacing:.4px;pointer-events:none;z-index:2}
+#hud b{color:var(--amber);font-weight:600}
+#log{position:absolute;left:0;right:0;bottom:0;padding:10px 14px;height:132px;overflow-y:auto;
+  background:linear-gradient(#0b0d0c00,#0b0d0cf2 40%);font-size:12.5px;color:var(--dim);z-index:2}
+#log div{margin:1px 0}#log b{color:var(--fg);font-weight:600}
+#controls{position:absolute;bottom:20px;right:10px;z-index:3;display:grid;grid-template-columns:repeat(3,36px);gap:4px}
+#controls button{padding:9px}
+#focusHint{position:absolute;top:34px;left:12px;font-size:10.5px;color:var(--dim);z-index:2}
+#focusHint b{color:var(--amber)}
+@media(max-width:700px){#hud{gap:7px;flex-wrap:wrap;font-size:10px}#log{height:75px;font-size:11px}#controls{bottom:20px}}
+</style>
+</head>
+<body>
+<div id="left">
+  <canvas id="board"></canvas>
+  <div id="hud">
+    <span>HP <b id="hp">–</b></span>
+    <span>MAP <b id="mapName">–</b></span>
+    <span>POS <b id="pos">–</b></span>
+    <span>TURN <b id="turn">–</b></span>
+    <span>PLAYERS <b id="clients">–</b></span>
+  </div>
+  <div id="focusHint"></div>
+  <div id="log"></div>
+  <div id="controls"><span></span><button data-move="0,-1">↑</button><span></span><button data-move="-1,0">←</button><button id="descendBtn">&gt;</button><button data-move="1,0">→</button><span></span><button data-move="0,1">↓</button></div>
+</div>
+<script>
+"use strict";
+/* Sandbox rendering child: no credentials, no network, no storage. It only draws
+   what the parent posts and posts intents back. Snapshots are accepted from the
+   parent window only. */
+const TILE_RGB={stone:[46,48,46],soil:[36,28,20],water:[22,48,62],wood:[70,56,40],
+  fungus:[26,36,22],tree:[24,38,20],plank:[62,48,36]};
+const AMBER="#ffcc66";
+const $=id=>document.getElementById(id);
+const PARENT=window.parent;
+
+let SNAP=null, focusGranted=false, logLines=0;
+
+function post(msg){
+  try{PARENT.postMessage(msg,"*");}catch(e){}
+}
+function setHint(){
+  $("focusHint").textContent=focusGranted
+    ?"game keys active — Esc returns to chat"
+    :"click map for keys";
+}
+function draw(){
+  const cv=$("board"),L=$("left");
+  const dpr=window.devicePixelRatio||1;
+  let W=L.clientWidth||L.getBoundingClientRect().width||0;
+  let H=L.clientHeight||L.getBoundingClientRect().height||0;
+  if(!W||!H){W=window.innerWidth;H=window.innerHeight;}
+  cv.width=Math.max(1,W*dpr);cv.height=Math.max(1,H*dpr);
+  cv.style.width=W+"px";cv.style.height=H+"px";
+  const ctx=cv.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle="#05060a";ctx.fillRect(0,0,W,H);
+  if(!SNAP)return;
+  const ts=(SNAP.seed&&SNAP.seed.meta&&SNAP.seed.meta.tileSize)||32, p=SNAP.player;
+  if(!p)return;
+  const vw=Math.ceil(W/ts),vh=Math.ceil(H/ts);
+  const ox=Math.floor(p.x-vw/2),oy=Math.floor(p.y-vh/2);
+  const map=SNAP.seed.maps.find(m=>m.id===SNAP.mapId);
+  if(!map)return;
+  for(let sy=0;sy<vh;sy++)for(let sx=0;sx<vw;sx++){
+    const x=ox+sx,y=oy+sy;
+    if(!SNAP.lit[y]||SNAP.lit[y][x]===undefined)continue;
+    const v=SNAP.lit[y][x], px=sx*ts, py=sy*ts;
+    if(v===0){ctx.fillStyle="#040507";ctx.fillRect(px,py,ts,ts);continue;}
+    const ch=map.ascii[y][x]||".";
+    const mat=(SNAP.seed.legend[ch]||[".","stone"])[1];
+    const base=TILE_RGB[mat]||TILE_RGB.stone;
+    const L2=v===1?1:0.34;
+    ctx.fillStyle="rgb("+((base[0]*L2)|0)+","+((base[1]*L2)|0)+","+((base[2]*L2)|0)+")";
+    ctx.fillRect(px,py,ts,ts);
+    if(ch==="#"){ctx.strokeStyle="rgba(0,0,0,.45)";ctx.strokeRect(px+.5,py+.5,ts-1,ts-1);}
+    if(ch==="~"){ctx.fillStyle="rgba(120,200,255,"+(v===1?.10:.05)+")";ctx.fillRect(px,py,ts,ts);}
+    if(mat==="tree"){ctx.fillStyle="rgb("+((30*L2)|0)+","+((58*L2)|0)+","+((26*L2)|0)+")";ctx.fillRect(px+2,py+2,ts-4,ts-4);}
+    if(ch===">"){ctx.fillStyle=AMBER;ctx.fillRect(px+ts/2-2,py+ts/2-2,4,4);}
+  }
+  for(const e of SNAP.seed.entities){
+    if(e.map!==SNAP.mapId)continue;
+    const v=SNAP.lit[e.y]&&SNAP.lit[e.y][e.x];
+    if(!v||v===0)continue;
+    const px=(e.x-ox)*ts,py=(e.y-oy)*ts;
+    ctx.font=(ts-8)+"px ui-monospace,monospace";ctx.textAlign="center";ctx.textBaseline="middle";
+    if(e.emitsLight){ctx.fillStyle="rgba(157,255,157,.09)";
+      ctx.fillRect(px-e.emitsLight*ts,py-e.emitsLight*ts,ts*(e.emitsLight*2+1),ts*(e.emitsLight*2+1));}
+    ctx.fillStyle=e.color;ctx.fillText(e.glyph,px+ts/2,py+ts/2+1);
+  }
+  ctx.fillStyle="#fff";ctx.font="9px ui-monospace,monospace";
+  ctx.fillText("FOV r"+SNAP.seed.meta.fov.radius+" - tile "+ts+"px - SHARED",12,H-6);
+}
+function syncHUD(){
+  if(!SNAP)return;
+  const p=SNAP.player;
+  $("hp").textContent=p.hp+"/"+p.maxHp;
+  $("mapName").textContent=(SNAP.seed.maps.find(m=>m.id===SNAP.mapId)||{}).name||"?";
+  $("pos").textContent=p.x+","+p.y;
+  $("turn").textContent=SNAP.turn;
+  $("clients").textContent=SNAP.clients;
+}
+function renderLog(){
+  /* Game storyline lives in SNAP.gameLog; fall back to chat-only snapshots from older servers. */
+  const entries=SNAP.gameLog||[];
+  if(entries.length===logLines)return;
+  logLines=entries.length;
+  const box=$("log");
+  box.replaceChildren();
+  for(const t of entries){
+    const d=document.createElement("div");
+    const s=String(t);
+    if(s.indexOf("You")===0){const b=document.createElement("b");b.textContent=s;d.appendChild(b);}
+    else d.textContent=s;
+    box.appendChild(d);
+  }
+  box.scrollTop=box.scrollHeight;
+}
+function apply(s){
+  SNAP=s;
+  syncHUD();
+  renderLog();
+  draw();
+}
+window.addEventListener("message",e=>{
+  if(e.source!==PARENT)return; /* accept snapshots from parent only */
+  const d=e.data;
+  if(!d||typeof d!=="object")return;
+  if(d.type==="gulch:snapshot"&&d.snapshot){apply(d.snapshot);return;}
+  if(d.type==="gulch:focus"){focusGranted=!!d.granted;setHint();return;}
+});
+document.addEventListener("keydown",e=>{
+  if(!focusGranted)return;
+  const k=e.key.toLowerCase();
+  if(k==="escape"){post({type:"gulch:focus-chat"});e.preventDefault();return;}
+  if(["arrowup","w"].includes(k))post({type:"gulch:move",dx:0,dy:-1});
+  else if(["arrowdown","s"].includes(k))post({type:"gulch:move",dx:0,dy:1});
+  else if(["arrowleft","a"].includes(k))post({type:"gulch:move",dx:-1,dy:0});
+  else if(["arrowright","d"].includes(k))post({type:"gulch:move",dx:1,dy:0});
+  else if(k===">")post({type:"gulch:descend"});
+  else return;
+  e.preventDefault();
+});
+$("left").addEventListener("pointerdown",()=>{post({type:"gulch:request-focus"});});
+document.querySelectorAll("[data-move]").forEach(b=>b.onclick=()=>{const [dx,dy]=b.dataset.move.split(",").map(Number);post({type:"gulch:move",dx,dy});});
+$("descendBtn").onclick=()=>post({type:"gulch:descend"});
+window.addEventListener("resize",draw);
+setHint();
+draw();
+post({type:"gulch:ready"});
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+(function(){
+'use strict';
+const descriptor=Object.getOwnPropertyDescriptor(Node.prototype,'textContent');
+if(!descriptor?.get||!descriptor?.set)return;
+for(const id of ['hp','mapName','pos','turn','clients']){
+ const node=document.getElementById(id);
+ if(!node)continue;
+ Object.defineProperty(node,'textContent',{
+  configurable:true,
+  get(){return descriptor.get.call(this);},
+  set(value){
+   const text=value==null?'':String(value);
+   if(descriptor.get.call(this)!==text)descriptor.set.call(this,text);
+  }
+ });
+}
+})();
+
+(function(){
+'use strict';
+function mount(){
+ for(const id of ['waitHistory','liveLagMeter']){
+  const panel=document.getElementById(id),summary=panel?.querySelector('summary');
+  if(!summary)continue;
+  const label=document.createElement('span');
+  label.textContent='UI Refresh Rate: 1s (1000ms)';
+  label.style.cssText='display:block;padding:5px 8px;color:#e8d6a7;font:10px/1.5 ui-monospace,monospace;pointer-events:none';
+  panel.insertBefore(label,summary);
+  const explanation=document.createElement('p');
+  explanation.textContent=id==='waitHistory'
+   ?'UI Refresh Rate is the diagnostic display and history sampling interval, not network ping or a delay added to movement. Recording runs once per second while visible and enabled. Wait averages below measure completed shared-update waits separately.'
+   :'UI Refresh Rate is the diagnostic display update interval while profiling is enabled and this browser is visible. Profiling starts paused. The 1000ms interval is not network ping or a delay added to movement; preparation and observed-update measurements below are separate.';
+  const body=document.getElementById(id==='waitHistory'?'waitHistoryBody':'liveLagBody');
+  if(body)body.prepend(explanation);
+ }
+}
+if(document.readyState==='complete')mount();
+else window.addEventListener('load',mount,{once:true});
+})();

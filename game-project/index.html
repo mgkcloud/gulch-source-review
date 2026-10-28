@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gulch game</title>
+<style>
+:root{
+  --ink:#0b0d0c; --panel:#12150f; --line:#252a1f; --fg:#d8e0c8; --dim:#7d8a6a;
+  --amber:#ffcc66;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--ink);color:var(--fg);
+  font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden}
+#left{position:relative;min-width:0;height:100%;width:100%;overflow:hidden;background:var(--ink)}
+#board{position:absolute;inset:0;display:block;image-rendering:pixelated}
+#hud{position:absolute;top:0;left:0;right:0;padding:8px 12px;background:linear-gradient(#0b0d0cec,#0b0d0c00);
+  display:flex;gap:18px;align-items:baseline;font-size:12px;letter-spacing:.4px;pointer-events:none;z-index:2}
+#hud b{color:var(--amber);font-weight:600}
+#moduleErrors{position:absolute;left:0;right:0;bottom:0;padding:10px 14px;height:132px;overflow-y:auto;
+  background:linear-gradient(#0b0d0c00,#0b0d0cf2 40%);font-size:12.5px;color:var(--dim);z-index:2}
+#log div{margin:1px 0}#log b{color:var(--fg);font-weight:600}
+#controls{position:absolute;bottom:20px;right:10px;z-index:3;display:grid;grid-template-columns:repeat(3,36px);gap:4px}
+#controls button{padding:9px}
+#focusHint{position:absolute;top:34px;left:12px;font-size:10.5px;color:var(--dim);z-index:2}
+#focusHint b{color:var(--amber)}
+@media(max-width:700px){#hud{gap:7px;flex-wrap:wrap;font-size:10px}#moduleErrors{height:75px;font-size:11px}#controls{bottom:20px}}
+</style>
+</head>
+<body>
+<div id="left">
+  <canvas id="board"></canvas>
+  <div id="hud">
+    <span>HP <b id="hp">–</b></span>
+    <span>MAP <b id="mapName">–</b></span>
+    <span>POS <b id="pos">–</b></span>
+    <span>TURN <b id="turn">–</b></span>
+    <span>PLAYERS <b id="clients">–</b></span>
+  </div>
+  <div id="focusHint"></div>
+  <div id="moduleErrors" role="alert"></div>
+  <div id="controls"><span></span><button data-move="0,-1">↑</button><span></span><button data-move="-1,0">←</button><button id="descendBtn">&gt;</button><button data-move="1,0">→</button><span></span><button data-move="0,1">↓</button></div>
+</div>
+<!-- GULCH_SCRIPTS -->
+</body></html>

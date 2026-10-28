@@ -1,0 +1,22 @@
+# state and secrets — never commit
+room-state.json
+world-state.json
+.backend-activation.json
+.room-password
+seed.json
+playtest-scenarios.json
+codex-home/
+private-uploads/
+backups/
+before-isolation/
+sdk-work/
+.askmode-prod-backup/
+.chatmode-backup/
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+*.pem
+*.key
+auth.json
+node_modules/

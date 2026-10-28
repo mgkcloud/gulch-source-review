@@ -1,0 +1,104 @@
+{
+  "id": "authoritative-held-movement-contention",
+  "priority": "highest",
+  "status": "BLOCKED_RETRYABLE",
+  "title": "Replace competing world saves with authoritative serialized turn commands",
+  "completed": false,
+  "blocker": {
+    "kind": "required_changes_outside_authorized_source_boundary",
+    "details": "This source editor can change game-project files only. It cannot edit the control shell, server, queue, predictionBridge, POST /api/game-state or worldStore.commit. Tools, processes, files outside supplied sources and external resources are prohibited for this response. The provided runtime has a full-state CAS commit bridge, not an authoritative command submission, acknowledgement, replay or resume protocol.",
+    "requiredCapability": "An authorized backend/build-tools execution path with isolated-instance access, existing operator status inspection, receipt preservation and server protocol implementation.",
+    "resumeCondition": "Resume this ticket through that authorized path after verifying the current source receipt, test save, existing tester and sole backend candidate. This JSON records the task locally as source data; it does not enqueue a host board job or repair the backend.",
+    "hostBoardRegistration": "Unavailable through the supplied game boundary; not performed."
+  },
+  "candidate": {
+    "startedByThisResponse": false,
+    "existingCandidateStatus": "Unverified",
+    "maximumConcurrentBackendCandidates": 1,
+    "promotionAllowed": false,
+    "productionActivation": "Not performed"
+  },
+  "operator": {
+    "reportedPid": 374484,
+    "reportedRunDirectory": "ordinary-client/runs/held-auto-refresh-31",
+    "status": "Not inspected",
+    "instruction": "Verify current process status, source revision and exact source receipt before using the existing operator. Do not launch a duplicate. Preserve existing receipt files."
+  },
+  "reportedEvidence": [
+    {
+      "revision": 200,
+      "provenance": "User-reported accumulating sample; not independently verified",
+      "exactSourceReceipt": null,
+      "qualification": "Not final acceptance evidence",
+      "initialHeldPhases": 6,
+      "heldBoth": {
+        "firstAuthoritativeTileMilliseconds": [140, 284],
+        "maximumTileGapMilliseconds": 344.5,
+        "totalRejectedAcknowledgementsAcrossClients": 6
+      },
+      "singleClient": {
+        "firstAuthoritativeTileMilliseconds": [119, 686],
+        "maximumTileGapMilliseconds": 873,
+        "totalRejectedAcknowledgements": 10
+      }
+    },
+    {
+      "revision": 199,
+      "provenance": "User-reported older batch; not independently verified",
+      "exactSourceReceipt": null,
+      "twoClientHolds": 20,
+      "totalRejectedAcknowledgements": 76,
+      "maximumSimultaneousInputTileGapMilliseconds": 1182.4,
+      "qualification": "Keep separate from revision 200"
+    }
+  ],
+  "implementationRequirements": [
+    "Use ordered, deduplicated input/turn commands processed by one authoritative serialized simulation. Preserve full-state CAS protections for any remaining replacement path; do not deep-merge world state.",
+    "Specify stable client identity, persistent operation identity, client input ordering, authoritative server sequence, accepted/rejected command outcomes, acknowledgement and reconnect resume semantics before wiring the client.",
+    "Make command deduplication and its authoritative outcome durable across restart. Define bounded retention and explicit recovery when replay history is unavailable; never silently discard unacknowledged input.",
+    "Predict eligible local input immediately, reconcile against authoritative sequence, then replay still-unacknowledged commands using the same simulation rules. Prediction must not generate authoritative rewards or repeat presentation side effects.",
+    "Retain pending input across reconnect and conflicts. Do not replace this with contention backoff, random delays, skipped held attempts, a ready gate or frame throttling.",
+    "Resolve proven simulation parity gaps before promotion. Preserve enemy turns, damage and death ordering, inventory, quests, generation, loot, crafting, trading, companions and every gameplay decorator.",
+    "Keep the candidate restricted to the isolated test instance until parity and acceptance evidence are complete. The reported movement-preview endpoint is prediction-only and is not authorization to use it as authoritative simulation."
+  ],
+  "sourceParityFindings": [
+    "The supplied GulchWorldEngine handles move and descend, but calls an optional cave hook and does not encompass the complete gameplay simulation.",
+    "Gameplay semantics are distributed across Gulch.commit wrappers and GulchCaveEnemies.advance wrappers. Their actual call order is part of existing behavior and must be captured in reference fixtures.",
+    "Several gameplay decisions use Math.random or Date.now. Authoritative execution and prediction require explicit randomness and time inputs with parity coverage; independently rerunning these decorators is not deterministic replay.",
+    "Setup generators currently submit full-world updates from snapshots and timers. Their ordering and interaction with played turns must be included in the authoritative simulation design.",
+    "The runtime currently permits one pending replacement, previews one eligible movement, and retains only one short-lived buffered action. That is not a durable command queue. Removing its gate without a server command protocol would increase conflicting replacements."
+  ],
+  "acceptance": {
+    "executed": false,
+    "sourceReceipt": null,
+    "saveReceipt": null,
+    "requiredScenarios": [
+      "Same-source, same-save held A with B observing",
+      "Same-source, same-save held B with A observing",
+      "Same-source, same-save simultaneous holds using independent ordinary /play browser processes",
+      "Restart, reconnect and command idempotency",
+      "Reference simulation parity for all gameplay decorators"
+    ],
+    "requirements": [
+      "More than zero eligible trials in every required held-input scenario.",
+      "No missing or duplicated input commands; retain an auditable input-to-command-to-server-sequence ledger, including explicit blocked and rejected outcomes.",
+      "Exact complete-world agreement at the same authoritative server sequence.",
+      "No unexplained end-to-end stalls exceeding 200 ms.",
+      "Record actual keydown-to-local-visible-frame latency separately, targeting the next frame or 16.7 ms at 60 Hz.",
+      "Record keydown-to-first-authoritative-tile, per-tile gaps, browser animation callback gaps, rejected acknowledgements, acknowledgement timing and sequence-matched peer-visible timing separately.",
+      "Compare A and B with B as the reference, documenting clock alignment, signed differences and uncertainty. Never subtract unaligned process clocks.",
+      "Distinguish client frame scheduling, host processing, server acknowledgement and peer observation. Pending duration is not ping; headless host callbacks are not device presentation FPS.",
+      "Preserve exact source/save receipts and recordings. Do not blend revision 199 and revision 200 samples or substitute a syntax check or single-browser smoke for acceptance."
+    ]
+  },
+  "validationFailureProtocol": {
+    "linkedTaskId": "build-tools-authoritative-held-movement-validator",
+    "linkedTaskStatus": "Conditional; not started or registered with host board",
+    "onTimeout": "Capture the exact failing assertion, phase, source/save receipt, process status and available logs. Diagnose the validator or harness through the linked build-tools task, then resume this movement ticket. Do not weaken checks, regenerate the game repeatedly or create a second backend candidate."
+  },
+  "activation": {
+    "requires": "Complete isolated acceptance evidence and authorized safe-boundary activation",
+    "preserve": ["room", "world", "chat", "jobs"],
+    "currentState": "No gameplay or protocol activation in this response"
+  }
+}
