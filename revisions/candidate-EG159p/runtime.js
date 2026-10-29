@@ -332,7 +332,7 @@ const api={
   let request;
   try{
    const isolated=structuredClone(data);view({...confirmed,gameState:isolated});
-   request={type:'gulch:commit',frameInstance,clientOpId:typeof crypto.randomUUID==='function'?crypto.randomUUID():'gulch-'+Date.now().toString(36)+'-'+(++serial)+'-'+Math.random().toString(36).slice(2),base:confirmed.stateRevision,revision:confirmed.revision,data:isolated,activity:typeof activity==='string'?activity:''};
+   request={type:'gulch:commit',frameInstance,clientOpId:typeof crypto.randomUUID==='function'?crypto.randomUUID():'gulch-'+Date.now().toString(36)+'-'+(++serial)+'-'+Math.random().toString(36).slice(2),base:confirmed.stateRevision,revision:confirmed.revision,data:isolated,activity:typeof activity==='string'?activity:'',intent:activeIntent?{type:activeIntent.type,dx:activeIntent.dx,dy:activeIntent.dy}:null};
   }catch(e){report('commit',e);return;}
   const from=derived.player;
   const record={request,preview:null,intent:activeIntent?{...activeIntent}:null,epoch:epoch(confirmed.gameState),outcome:'unknown',started:performance.now(),sentAt:null,refreshRequestedAt:null,rejected:false};pending=record;rebuildPrediction();

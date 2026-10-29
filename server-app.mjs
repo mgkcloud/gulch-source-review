@@ -356,18 +356,46 @@ function pushChat(from,text,sys=false){
 }
 // Installed in the nonce-protected parent shell before its legacy bridge. Keeping
 // transport here preserves old source snapshots without editing builder UI files.
+function installPredictionBridge(bridge) {
+  let projectId='game',generation=0,gameWindow=null;
+  const target=()=>gameWindow||(gameWindow=frame.contentWindow);
+  const state=()=>Object.freeze({projectId,generation,active:projectId==='game'});
+  bridge.captureSelection=()=>{
+    const captured=state(),source=target();
+    return Object.freeze({...captured,source,current:()=>projectId==='game'&&generation===captured.generation&&target()===source});
+  };
+  Object.defineProperty(window,'__gulchGameBridge',{value:Object.freeze({
+    selectProject(next){
+      if(!['game','one-up-website','one-up-monitor'].includes(next))throw new TypeError('Unknown native project');
+      if(next===projectId)return state();
+      target();
+      setGameFocus(false);
+      window.__gulchAction=null;
+      projectId=next;generation++;
+      if(next==='game')sendSnap();
+      return state();
+    },
+    getSelection:state
+  }),writable:false,configurable:false});
+  window.addEventListener('message',bridge,true);
+}
 function predictionBridge(event) {
-  if(event.source!==frame.contentWindow)return;
+  const selection=predictionBridge.captureSelection();
+  if(event.source!==selection.source)return;
+  const target=selection.source;
+  const current=selection.current;
   if(event.data?.type==='gulch:capabilities'){
     if(typeof event.data.frameInstance!=='string'||event.data.frameInstance.length>128)return;
     event.stopImmediatePropagation();
-    frame.contentWindow.postMessage({type:'gulch:capabilities',protocol:2,frameInstance:event.data.frameInstance,orderedAuthority:ORDERED_RUNTIME.enabled,worldEpoch:ORDERED_RUNTIME.worldEpoch},'*');return;
+    target.postMessage({type:'gulch:capabilities',protocol:2,frameInstance:event.data.frameInstance,orderedAuthority:ORDERED_RUNTIME.enabled,worldEpoch:ORDERED_RUNTIME.worldEpoch},'*');return;
   }
   // Ordered command branch (FLAG-OFF): forward the immutable ordered envelope to the ordered
   // endpoint and reply the own result. Default-OFF endpoints 404, so this is inert unless enabled.
   if(event.data?.type==='gulch:ordered-command'){
     event.stopImmediatePropagation();
-    const env=event.data.envelope, reply=result=>frame.contentWindow.postMessage({type:'gulch:ordered-result',opId:env&&env.opId,result},'*');
+    let env;try{env=JSON.parse(JSON.stringify(event.data.envelope??null));}catch{env=null;}
+    const reply=result=>{if(current())target.postMessage({type:'gulch:ordered-result',opId:env&&env.opId,result},'*');};
+    if(!selection.active){target.postMessage({type:'gulch:ordered-result',opId:env&&env.opId,result:{ok:false,paused:true,code:409,error:'Game project is paused'}},'*');return;}
     if(!env||typeof env!=='object'){reply({unknown:true,code:400,error:'Expected an ordered envelope'});return;}
     const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),4000);
     fetch('/api/ordered-command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(env),signal:controller.signal})
@@ -378,14 +406,19 @@ function predictionBridge(event) {
   }
   if(!['gulch:commit','gulch:commit-recover'].includes(event.data?.type))return;
   event.stopImmediatePropagation();
-  const d=event.data;
+  let d;try{d=JSON.parse(JSON.stringify(event.data));}catch{return;}
   const project=s=>s&&({gameState:s.gameState,stateRevision:s.stateRevision,revision:s.revision,clients:s.clients});
   const snapshot=()=>project(SNAP);
   const finish=(outcome,status,error,confirmed=snapshot(),receipt=null,paused=false)=>{
+    if(!current())return;
     if(error)$("peerHint").textContent=error;
-    frame.contentWindow.postMessage({type:'gulch:commit-result',clientOpId:d.clientOpId,
+    target.postMessage({type:'gulch:commit-result',clientOpId:d.clientOpId,
       outcome,paused,frameInstance:d.frameInstance,ok:outcome==='accepted'?true:outcome==='rejected'?false:undefined,status,error,receipt,snapshot:confirmed},'*');
   };
+  if(!selection.active){
+    target.postMessage({type:'gulch:commit-result',clientOpId:d.clientOpId,frameInstance:d.frameInstance,
+      outcome:'unknown',paused:true,status:409,error:'Game project is paused; no operation dispatched by this request.'},'*');return;
+  }
   if(!Number.isSafeInteger(d.base)||!Number.isSafeInteger(d.revision)||
     !d.data||typeof d.data!=='object'||d.scope&&d.scope!=='gameplay'){
     finish('rejected',409,'State changed; action rejected. Please try again.');return;
@@ -395,7 +428,12 @@ function predictionBridge(event) {
   // browser game cannot move at all once command mode engages.
   if(ORDERED_RUNTIME.enabled&&d.type==='gulch:commit'){
     const pressed=window.__gulchAction;
-    if(!pressed||Date.now()-pressed.at>5000){
+    // Keyboard movement is handled inside the frame, so __gulchAction is only set by
+    // parent-side controls. The frame sends the intent with the commit; prefer it and
+    // fall back to an action a parent control recorded.
+    const fromFrame=d.intent&&typeof d.intent.type==='string'?d.intent:null;
+    const action=fromFrame||(pressed&&Date.now()-pressed.at<=5000?pressed.action:null);
+    if(!action){
       // No player action behind this commit (world tick, reconcile, or a retry).
       // There is nothing to order, so confirm against the authoritative snapshot and
       // let the next broadcast reconcile the client, instead of surfacing an error.
@@ -411,13 +449,13 @@ function predictionBridge(event) {
         ?crypto.randomUUID()
         :(function(){const h=()=>Math.floor(Math.random()*0x10000).toString(16).padStart(4,'0');
           return h()+h()+'-'+h()+'-4'+h().slice(1)+'-a'+h().slice(1)+'-'+h()+h()+h();})()),
-      action:pressed.action};
+      action};
     st.seq++;
     const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),5000);
     fetch('/api/ordered-command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(env),signal:ctrl.signal})
       .then(async r=>{const v=await r.json().catch(()=>({}));
         if(r.ok&&v.ok===true){
-          finish('accepted',200,null,{gameState:d.data,stateRevision:v.stateRevision,revision:d.revision,clients:SNAP?SNAP.clients:0});
+          finish('accepted',200,null,{gameState:d.data,stateRevision:v.stateRevision,revision:d.revision,clients:SNAP?SNAP.clients:0},{ok:true,stateRevision:v.stateRevision,opId:env.opId,streamId:env.streamId,clientSequence:env.clientSequence});
         }else{
           // A sequence gap means our local stream drifted; start a clean stream next turn.
           if(v.gap||v.staleSequence){st.streamId=(typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():'s-'+Date.now());st.seq=0;}
@@ -459,6 +497,8 @@ function predictionBridge(event) {
     const known=proofs.get(d.clientOpId);
     let acceptedReceipt=known?.payload===payload?known.receipt:null,acceptedStatus=known?.payload===payload?known.status:200;
     for(let attempt=0;attempt<3;attempt++){
+      // Continue read-only accepted-write reconciliation, never resend after a selection change.
+      if(!current()&&!acceptedReceipt)return;
       let response,receipt=acceptedReceipt,confirmed=snapshot(),error,outcome=acceptedReceipt?'accepted':'unknown';
       if(!acceptedReceipt)try{
         const result=await boundedRead('/api/game-state',{method:'POST',headers:{'Content-Type':'application/json'},body:payload});
@@ -1745,6 +1785,59 @@ async function handle(req,res){
   if(req.method==='POST'&&u.pathname!=='/api/auth'&&(!releaseEnabled||releaseActivating||VALIDATION))return send(res,503,{error:'Backend is starting or validating; retry shortly'});
   if(req.method==='GET'&&u.pathname==='/api/backend-release')return authed(req)?send(res,200,{digest:releaseDigest,status:releaseEnabled?'active':'starting'}):send(res,401,{error:'no session'});
   if(req.method==="POST" && (req.headers["sec-fetch-site"]==="cross-site" || req.headers.origin==="null"))return send(res,403,{error:"Cross-origin writes denied"});
+  if(u.pathname==='/builder'||u.pathname.startsWith('/builder/')||u.pathname==='/api/builder/v1'||u.pathname.startsWith('/api/builder/v1/')){
+    if(!authed(req))return send(res,401,{error:'no session'});
+    if(u.pathname==='/builder'&&['GET','HEAD'].includes(req.method)){res.writeHead(308,{Location:'/builder/','Cache-Control':'no-store'});res.end();return;}
+    const writing=!['GET','HEAD','OPTIONS'].includes(req.method);
+    if(writing&&(!releaseEnabled||releaseActivating||VALIDATION))return send(res,503,{error:'Backend is starting or validating; retry shortly'});
+    if(writing&&(req.headers['sec-fetch-site']==='cross-site'||req.headers.origin==='null'))return send(res,403,{error:'Cross-origin writes denied'});
+    if(writing&&String(req.headers['content-type']||'').split(';')[0].trim().toLowerCase()!=='application/json')return send(res,415,{error:'JSON required'});
+    let decoded;
+    try{decoded=decodeURIComponent(u.pathname);}catch{return send(res,400,{error:'Invalid builder path'});}
+    if(decoded.includes('\\')||decoded.split('/').some(part=>part==='.'||part==='..')||/%(?:2f|5c|2e|25)/i.test(u.pathname))return send(res,400,{error:'Invalid builder path'});
+    if(Number(req.headers['content-length']||0)>500000)return send(res,413,{error:'Request exceeds 500KB'});
+    const headers={host:'gulch.fy.studio'};
+    for(const name of ['cookie','origin','content-type','accept','sec-fetch-site','last-event-id','x-builder-context','x-builder-csrf']){
+      if(req.headers[name]!==undefined)headers[name]=req.headers[name];
+    }
+    return new Promise(resolve=>{
+      let upstream,finished=false,bytes=0;
+      const request=http.request({hostname:'127.0.0.1',port:18792,method:req.method,path:u.pathname+u.search,headers,agent:false});
+      const timer=setTimeout(()=>fail(),10000);
+      const cleanup=()=>{
+        if(finished)return;
+        finished=true;clearTimeout(timer);
+        req.unpipe(request);req.off('data',count);req.off('aborted',disconnect);req.off('error',disconnect);
+        res.off('close',disconnect);res.off('finish',cleanup);res.off('error',disconnect);
+        upstream?.unpipe(res);upstream?.destroy();request.destroy();
+        if(!req.complete&&!req.destroyed)req.resume();
+        resolve();
+      };
+      const disconnect=()=>{cleanup();if(!res.destroyed)res.destroy();};
+      const fail=(code=502)=>{
+        if(finished)return;
+        cleanup();
+        if(!res.headersSent&&!res.destroyed){res.setHeader('X-Content-Type-Options','nosniff');send(res,code,{error:code===413?'Request exceeds 500KB':'Builder temporarily unavailable'});}
+        else if(!res.destroyed)res.destroy();
+      };
+      const count=chunk=>{bytes+=chunk.length;if(bytes>500000)fail(413);};
+      req.once('aborted',disconnect);req.once('error',disconnect);req.on('data',count);
+      res.once('close',disconnect);res.once('finish',cleanup);res.once('error',disconnect);
+      request.on('error',()=>fail());
+      request.once('response',response=>{
+        upstream=response;clearTimeout(timer);
+        response.on('error',()=>fail());response.once('aborted',()=>fail());
+        response.once('close',()=>{if(!response.complete)fail();});
+        if(finished){response.destroy();return;}
+        const responseHeaders={'cache-control':'no-store','x-content-type-options':'nosniff'};
+        for(const name of ['content-type','content-security-policy','content-security-policy-report-only','referrer-policy','content-length','content-encoding','vary','x-accel-buffering']){
+          if(response.headers[name]!==undefined)responseHeaders[name]=response.headers[name];
+        }
+        res.writeHead(response.statusCode,responseHeaders);res.flushHeaders();response.pipe(res);
+      });
+      req.pipe(request);
+    });
+  }
   if(req.method==="POST"&&u.pathname==="/api/uploads"){
     if(!authed(req))return send(res,401,{error:"no session"});
     try{return send(res,201,await acceptUpload(req,readCookie(req,"gulch_sess").split(".")[0]));}
@@ -1933,7 +2026,7 @@ async function handle(req,res){
 
   if (p === "/" || p === "/index.html" || p === "/play") {
     const nonce=crypto.randomBytes(16).toString("hex");
-    const html=fs.readFileSync(path.join(ROOT,"index.html"),"utf8").replace('<script>','<script nonce="'+nonce+'">const GAME_NONCE="'+nonce+'";const ORDERED_RUNTIME='+JSON.stringify({enabled:ORDERED_AUTHORITY,worldEpoch:orderedWorldEpoch()})+';window.addEventListener("message",'+predictionBridge.toString()+',true);');
+    const html=fs.readFileSync(path.join(ROOT,"index.html"),"utf8").replace('<script>','<script type="importmap" nonce="'+nonce+'">{"imports":{"@noble/hashes/sha256":"/builder/assets/noble/sha256.js","@noble/hashes/utils":"/builder/assets/noble/utils.js","@noble/hashes/crypto":"/builder/assets/noble/crypto.js"}}</script><script nonce="'+nonce+'">const GAME_NONCE="'+nonce+'";const ORDERED_RUNTIME='+JSON.stringify({enabled:ORDERED_AUTHORITY,worldEpoch:orderedWorldEpoch()})+';('+installPredictionBridge.toString()+')('+predictionBridge.toString()+');');
     res.setHeader("Content-Security-Policy",`default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; frame-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'self'; object-src 'none'`);
     return send(res,200,html,"text/html; charset=utf-8");
   }

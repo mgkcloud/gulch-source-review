@@ -9,14 +9,14 @@ const dormant=new Set();
 Gulch.register=function(name,callbacks){
  const result=register(name,callbacks);
  if(!targets.has(name)||typeof callbacks?.snapshot!=='function'||typeof callbacks?.resize!=='function')return result;
- // These supplied components paint in snapshot and resize. Their immediate
- // self-rescheduling frame loops duplicate the runtime's camera delivery.
  const token={name};armed=token;
  queueMicrotask(()=>{if(armed===token)armed=null;});
  return result;
 };
 window.requestAnimationFrame=function(callback){
- if(armed&&typeof callback==='function'&&callback.name==='frame'){
+ // Profiling wraps callbacks and changes their names. Identify the initial
+ // redundant loop by its registration scope rather than callback.name.
+ if(armed&&typeof callback==='function'){
   armed=null;skipped++;
   const id=--serial;dormant.add(id);
   return id;

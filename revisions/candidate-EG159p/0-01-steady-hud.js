@@ -1,19 +1,21 @@
 (function(){
 'use strict';
 const descriptor=Object.getOwnPropertyDescriptor(Node.prototype,'textContent');
-if(!descriptor?.get||!descriptor?.set)return;
-for(const id of ['hp','mapName','pos','turn','clients']){
- const node=document.getElementById(id);
- if(!node)continue;
- Object.defineProperty(node,'textContent',{
-  configurable:true,
-  get(){return descriptor.get.call(this);},
-  set(value){
-   const text=value==null?'':String(value);
-   if(descriptor.get.call(this)!==text)descriptor.set.call(this,text);
+if(!descriptor?.get||!descriptor?.set||!descriptor.configurable)return;
+let skipped=0;
+Object.defineProperty(Node.prototype,'textContent',{
+ ...descriptor,
+ set(value){
+  const text=value==null?'':String(value);
+  // Preserve child elements, event handlers, and the existing reconciliation
+  // setter. Only suppress an identical write to a plain-text game UI node.
+  if(this instanceof HTMLElement&&this.closest('#left')&&!this.matches('script,style,textarea')&&this.childElementCount===0&&(this.childNodes.length===0||this.childNodes.length===1&&this.firstChild.nodeType===Node.TEXT_NODE)&&descriptor.get.call(this)===text){
+   skipped++;return;
   }
- });
-}
+  descriptor.set.call(this,value);
+ }
+});
+window.GulchSteadyUI=Object.freeze({report(){return {unchangedTextWritesSkipped:skipped};}});
 })();
 
 (function(){
