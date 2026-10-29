@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import {acceptUpload,resolveUploads} from "./upload-store.mjs";
 import {readSources, documentFor, stage, validatePath} from "./revisions.mjs";
 import {reconstructVersions,restorationOperations} from "./revision-history.mjs";
-import {restore,saveRoom,retryable,legacyView} from "./room-store.mjs";
+import {restore,saveRoom,retryable,legacyView,loadRoom} from "./room-store.mjs";
 import {runEditorJob,resumeParkedJobs} from "./editor-lane.mjs";
 import {parentPort,workerData} from 'node:worker_threads';
 import {verifyBackendCandidate,backendSources,applyBackendOperations} from './backend-release.mjs';
@@ -44,7 +44,7 @@ const SECRET = fs.readFileSync(SESSION_FILE, "utf8").trim();
 /* ---------------------------------------------------------------- state */
 const ROOM_FILE = path.join(ROOT, "room-state.json");
 let saved = null;
-try { saved = JSON.parse(fs.readFileSync(ROOM_FILE, "utf8")); } catch(e) { if(e.code!=="ENOENT")throw Error("Saved room is unreadable; refusing to overwrite it"); }
+try { saved = loadRoom(ROOM_FILE); } catch(e) { if(e.code!=="ENOENT")throw Error("Saved room is unreadable; refusing to overwrite it"); }
 const seed = saved?.seed || JSON.parse(fs.readFileSync(SEED_FILE, "utf8"));
 const state=restore(saved,seed);
 const worldStore=openWorldStore(path.join(ROOT,"world-state.json"),state,saved?.worldStore===1);
@@ -549,7 +549,7 @@ function composeCandidate(request){
   const before=composed[op.path],offset=before.indexOf(op.find);
   if(offset<0||before.indexOf(op.find,offset+1)!==-1)throw candidateFailure(409,'Each ordered replacement must match exactly once');
   const after=before.slice(0,offset)+op.content+before.slice(offset+op.find.length);
-  if(Buffer.byteLength(after,'utf8')>200000)throw candidateFailure(413,'Candidate source exceeds 200000 UTF-8 bytes');
+
   composed[op.path]=after;
  }
  const normalized=touched.map(name=>({op:'update',path:name,content:composed[name]}));
@@ -1094,7 +1094,7 @@ async function discardCandidate(staged){
   if(!staged||state.sourceDir===path.relative(ROOT,staged.dir))return;
   // A failed directory fsync can leave a published metadata rename on disk.
   // Keep its source for restart recovery even when accepted memory rolled back.
-  const saved=JSON.parse(await fs.promises.readFile(ROOM_FILE,'utf8'));
+  const saved=loadRoom(ROOM_FILE);
   if(saved.sourceDir===path.relative(ROOT,staged.dir))return;
   await fs.promises.rm(staged.dir,{recursive:true,force:true});
 }
@@ -2222,16 +2222,20 @@ function askSourceContext(question){
       }
       write({type:"ask.context",files:ctx.picked.map(p=>p.rel),totalFiles:ctx.total,
         filesIncluded:ctx.picked.length,contextChars:ctxBytes+Math.min(ctx.manifest.length,20000)});
-      const prompt="You are answering a question about the Gulch game codebase and its running server. "
-        +"The user is the operator. Answer in plain prose, concise, no code fences unless essential. "
-        +"Base your answer on the SOURCE EXCERPTS below; cite file names and, where useful, line-level detail. "
-        +"If the excerpts genuinely do not contain the answer, say so plainly rather than guessing. "
+      const prompt="You are investigating the Gulch game codebase and its running server. The user is the operator. "
+        +"Answer in plain prose, concise, no code fences unless essential. "
+        +"You have READ-ONLY shell tools scoped to this repository. Use them. Listing, searching, reading files and running read-only commands is expected work, not a last resort. "
+        +"INVESTIGATE BEFORE YOU CONCLUDE. Form a hypothesis, then test it against the real files, and against the running server where a command can settle it. "
+        +"The SOURCE EXCERPTS below are a starting point, not the boundary of your evidence: when a command would answer the question more precisely, run the command. "
+        +"Cite evidence as file:line and quote the decisive line. A claim without a file:line or command output is not an answer. "
+        +"NEVER say you cannot determine something while useful read-only checks remain unrun. If you must report a limit, first state exactly which commands you ran, what they returned, and which specific check would settle it. "
+        +"'I cannot confirm from the saved files alone' is not an acceptable answer when the repository is readable. "
         +"You are in a READ-ONLY sandbox: do not propose file edits, do not emit a patch, do not ask for confirmation to change anything. "
-        +"If the answer requires a code change, say what would need to change and stop; the operator will use Task mode for that."
+        +"If the answer requires a code change, say precisely what would change and where, then stop; the operator will use Task mode for that."
         +sourceBlock
         +(transcript?"\n\nCONVERSATION SO FAR (oldest first; treat the last assistant line as your own previous answer):\n"+transcript:"")
         +"\n\nQuestion:\n"+question;
-      const result=await streamSourceTurn({prompt,root:ROOT,cwd:ROOT,timeoutMs:180000,effort:'low',tools:true,
+      const result=await streamSourceTurn({prompt,root:ROOT,cwd:ROOT,timeoutMs:240000,effort:'medium',tools:true,
         onEvent:ev=>write(ev)});
       const answer=typeof result?.text==="string"?result.text.trim():"";
       write({type:"ask.done",ok:!!answer,answerChars:answer.length,elapsedMs:Date.now()-t0,

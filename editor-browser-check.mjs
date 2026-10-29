@@ -14,7 +14,7 @@ export async function checkEditor(html,root){
  try{
   for(const e of fs.readdirSync(root,{withFileTypes:true}))if(/\.(?:m?js)$/.test(e.name)||e.name==='seed.json')copyTree(path.join(root,e.name),path.join(dir,e.name));
   for(const required of ['server.js','server-app.mjs','backend-release.mjs','editor-lane.mjs','world-store.mjs','room-store.mjs','upload-store.mjs','revisions.mjs','revision-history.mjs'])if(!fs.existsSync(path.join(dir,required)))throw Error('Missing required backend import: '+required);
-  const state=JSON.parse(fs.readFileSync(path.join(root,'room-state.json'),'utf8'));
+  const state=loadRoom(path.join(root,'room-state.json'));
   if(!/^(game-project|revisions\/candidate-[A-Za-z0-9]+)$/.test(state.sourceDir))throw Error('Invalid validation revision path');
   let current=root;for(const part of state.sourceDir.split('/')){current=path.join(current,part);const s=fs.lstatSync(current);if(s.isSymbolicLink()||!s.isDirectory())throw Error('Invalid revision directory');}
   copyTree(current,path.join(dir,'game-project'));state.sourceDir='game-project';state.repairEnabled=false;

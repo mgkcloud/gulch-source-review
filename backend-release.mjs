@@ -40,7 +40,7 @@ export function applyBackendOperations(root,operations){
   if(!op||!['replace','update','create'].includes(op.op))throw Error('Unsupported source operation');
   sourcePath(root,op.path);if(!changes.has(op.path)&&changes.size>=5)throw Error('At most five changed files');
   const before=sources[op.path]??null;
-  if(typeof op.content!=='string'||Buffer.byteLength(op.content)>200000)throw Error('Invalid source content size');
+  if(typeof op.content!=='string')throw Error('Invalid source content type');
   if(op.op==='create'&&(before!==null||op.path!=='movement-engine.mjs'))throw Error('Only a missing movement-engine.mjs may be created');
   if(op.op!=='create'&&before===null)throw Error('Source does not exist: '+op.path);
   let after=op.content;
@@ -48,7 +48,7 @@ export function applyBackendOperations(root,operations){
    if(typeof op.find!=='string'||!op.find||before.split(op.find).length!==2)throw Error('Replacement target must occur exactly once');
    after=before.replace(op.find,()=>op.content);
   }else if(op.find!==undefined&&op.find!=='')throw Error('Create/update find must be empty');
-  if(!after.trim()||Buffer.byteLength(after)>200000)throw Error('Resulting file exceeds source limits');
+  if(!after.trim())throw Error('Resulting source file is empty');
   if(op.path==='index.html'&&(!/^\s*<!doctype html>/i.test(after)||!after.includes('<script>')))throw Error('Builder document lost its doctype or script seam');
   const prior=changes.get(op.path);const original=prior?prior.before:before;
   changes.set(op.path,{path:op.path,op:original===null?'create':'update',before:original,after});sources[op.path]=after;
@@ -96,7 +96,7 @@ function readCandidate(root,ref){
  if(!Array.isArray(m.changes)||m.changes.length<1||m.changes.length>5)throw Error('Invalid candidate changes');
  const seen=new Set();for(const c of m.changes){
   sourcePath(root,c.path);if(seen.has(c.path))throw Error('Duplicate candidate path');seen.add(c.path);
-  if(typeof c.after!=='string'||Buffer.byteLength(c.after)>200000||c.before!==null&&typeof c.before!=='string')throw Error('Invalid candidate code');
+  if(typeof c.after!=='string'||c.before!==null&&typeof c.before!=='string')throw Error('Invalid candidate code');
   if(c.before===null&&c.path!=='movement-engine.mjs')throw Error('Invalid candidate creation');
   regular(path.join(dir,'app',c.path));if(fs.readFileSync(path.join(dir,'app',c.path),'utf8')!==c.after)throw Error('Candidate source differs from manifest');
  }
@@ -180,7 +180,7 @@ export async function runSupervisor(root){
  }
  async function finishBoot(w){await rpc(w,'finalize');await rpc(w,'enable');}
  function persistedJob(jobId,ref){
-  const state=json(path.join(root,'room-state.json')),job=state.patches?.find(j=>j.id===jobId);
+  const state=loadRoom(path.join(root,'room-state.json')),job=state.patches?.find(j=>j.id===jobId);
   if(!job||job.cancelRequested||job.archived||job.status!=='running'||job.stage!=='activating'||job.backendCandidate?.id!==ref.id||job.backendCandidate?.digest!==ref.digest)throw Error('Activation task is no longer eligible');
   if(state.patches.some(j=>j.id!==jobId&&['queued','running'].includes(j.status)||['queued','running'].includes(j.check?.status)))throw Error('Queue has not drained');
   return state;

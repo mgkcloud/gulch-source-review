@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import {durableReplace} from './world-store.mjs';
 export const STORY='main quest is to find pieces of the legendary sword build it at the cathedral and take the sword to the stone of truth';
 const RETRYABLE=new Set(['awaiting_retry','interrupted','failed','rejected','queued_not_sent','cancelled']);
@@ -27,11 +28,39 @@ export function validateCommit(state,b){
   }
   return null;
 }
+/* Patch jobs are source-code history, not room state. They were 53 MB of a
+   55 MB room-state.json, so every player move serialised and fsynced them.
+   The sidecar is written only when the job list actually changes. */
+const lastPatches=new Map();
+export function patchesFile(file){return file+".patches";}
+export function loadRoom(file){
+  let room={},jobs=null;
+  try{room=JSON.parse(fs.readFileSync(file,"utf8"));}catch(e){if(e.code!=="ENOENT")throw e;}
+  try{jobs=JSON.parse(fs.readFileSync(patchesFile(file),"utf8"));}catch(e){if(e.code!=="ENOENT")throw e;}
+  // Legacy layout: jobs still embedded. Move them out on first read.
+  if(!Array.isArray(jobs)&&Array.isArray(room.patches)){
+    jobs=room.patches;
+    const {patches,...rest}=room;
+    durableReplace(patchesFile(file),JSON.stringify(jobs));
+    durableReplace(file,JSON.stringify(rest));
+    room=rest;
+  }
+  return {...room,patches:Array.isArray(jobs)?jobs:[]};
+}
 export function saveRoom(file,state){
-  if(state.worldStore===1){
-    const {gameState,stateRevision,gameLog,seed,turn,...metadata}=state;
+  const {patches,...rest}=state;
+  // Jobs first: they are the durable record of queued work.
+  if(Array.isArray(patches)){
+    const text=JSON.stringify(patches);
+    if(lastPatches.get(file)!==text){
+      durableReplace(patchesFile(file),text);
+      lastPatches.set(file,text);
+    }
+  }
+  if(rest.worldStore===1){
+    const {gameState,stateRevision,gameLog,seed,turn,...metadata}=rest;
     durableReplace(file,JSON.stringify({...metadata,clients:0}));
-  }else durableReplace(file,JSON.stringify({...state,seed:state.gameState.seed,turn:state.gameState.turn||0,clients:0}));
+  }else durableReplace(file,JSON.stringify({...rest,seed:rest.gameState.seed,turn:rest.gameState.turn||0,clients:0}));
 }
 // Compatibility projection only: gameplay is never evaluated by the server.
 export function legacyView(data){
